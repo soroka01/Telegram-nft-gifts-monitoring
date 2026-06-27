@@ -1,0 +1,26 @@
+{
+  "bot": {
+    "token": "PUT_TELEGRAM_BOT_TOKEN_HERE",
+    "admin_ids": [
+      123456789
+    ]
+  },
+  "monitor": {
+    "targets": [
+      "ExampleGift-12345",
+      "AnotherGift-67890"
+    ],
+    "interval_seconds": 30,
+    "request_timeout_seconds": 10,
+    "request_delay_seconds": 0.25,
+    "jitter_seconds": 3,
+    "error_backoff_seconds": 120,
+    "notify_initial_snapshot": true,
+    "notify_errors": true,
+    "track_image_url": false,
+    "timezone": "Europe/Moscow",
+    "state_path": "state/nft_gift_state.json",
+    "events_path": "logs/nft_gift_events.jsonl",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+  }
+}

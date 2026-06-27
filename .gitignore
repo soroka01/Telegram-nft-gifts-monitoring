@@ -1,0 +1,10 @@
+config.json
+config.local.json
+*.local.json
+.venv/
+venv/
+env/
+state/
+logs/
+__pycache__/
+*.pyc
