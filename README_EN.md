@@ -14,7 +14,7 @@ No Telegram user account or Telethon session is required. The monitor reads the 
 - title, collection, and number;
 - gift image URL, if `track_image_url` is enabled.
 
-Changes to quantity, issued count, original sender, and original recipient are not sent as bot alerts. They are still saved to state and JSONL logs as quiet changes.
+Changes to quantity, issued count, original sender, original recipient, and owner avatar are not sent as bot alerts. They are still saved to state and JSONL logs as quiet changes.
 
 ## Setup
 
@@ -47,6 +47,8 @@ You can also paste a full URL such as `https://t.me/nft/ExampleGift-12345`; the 
 The default `interval_seconds` is `30`. For a small list of gifts, you can lower it, for example to `10`. If Telegram starts returning `429` or `5xx`, the monitor applies `error_backoff_seconds`.
 
 `request_delay_seconds` adds a small pause between gifts within one check cycle. `jitter_seconds` adds a random delay between cycles so requests are not perfectly mechanical.
+
+`stale_error_notify_seconds` controls when errors are sent to the bot. The default is `3600`: a single `ConnectTimeout` will not be sent if the next cycle updates the gift successfully. The error alert is sent only when a specific gift has not been updated for one hour.
 
 ## Bot Commands
 

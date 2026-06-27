@@ -15,6 +15,7 @@
     "request_delay_seconds": 0.25,
     "jitter_seconds": 3,
     "error_backoff_seconds": 120,
+    "stale_error_notify_seconds": 3600,
     "notify_initial_snapshot": true,
     "notify_errors": true,
     "track_image_url": false,

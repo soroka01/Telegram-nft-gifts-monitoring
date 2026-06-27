@@ -52,6 +52,7 @@ IGNORED_NOTIFY_FIELDS = {
     "original_recipient",
     "original_date",
     "original_footer",
+    "owner_photo_url",
 }
 
 DIFF_FIELDS = {
@@ -129,6 +130,7 @@ class MonitorConfig:
     request_delay_seconds: float
     jitter_seconds: float
     error_backoff_seconds: int
+    stale_error_notify_seconds: int
     notify_initial_snapshot: bool
     notify_errors: bool
     track_image_url: bool
@@ -260,6 +262,7 @@ def load_config() -> AppConfig:
         request_delay_seconds=max(0.0, float(monitor_raw.get("request_delay_seconds", 0.25))),
         jitter_seconds=max(0.0, float(monitor_raw.get("jitter_seconds", 3))),
         error_backoff_seconds=max(0, int(monitor_raw.get("error_backoff_seconds", 120))),
+        stale_error_notify_seconds=max(0, int(monitor_raw.get("stale_error_notify_seconds", 3600))),
         notify_initial_snapshot=parse_bool(monitor_raw.get("notify_initial_snapshot", True), True),
         notify_errors=parse_bool(monitor_raw.get("notify_errors", True), True),
         track_image_url=parse_bool(monitor_raw.get("track_image_url", False), False),
@@ -697,12 +700,35 @@ def value_text(value: Any) -> str:
     return str(value)
 
 
+def telegram_profile_link(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.match(r"^https?://t\.me/([A-Za-z0-9_]{5,32})/?$", text)
+    if not match:
+        match = re.match(r"^t\.me/([A-Za-z0-9_]{5,32})/?$", text)
+    if not match:
+        return None
+    username = match.group(1)
+    return f'<a href="https://t.me/{html_attr(username)}">@{html_escape(username)}</a>'
+
+
+def change_value_html(field: str, value: Any) -> str:
+    if value in (None, ""):
+        return "нет"
+    if field == "owner_url":
+        profile_link = telegram_profile_link(value)
+        if profile_link:
+            return profile_link
+    return code_text(value_text(value))
+
+
 def change_line(change: dict[str, Any]) -> str:
     field = change["field"]
     label = FIELD_LABELS.get(field, field)
-    old = value_text(change.get("old"))
-    new = value_text(change.get("new"))
-    return f"{html_escape(label)}: {code_text(old)} -> {code_text(new)}"
+    old = change_value_html(field, change.get("old"))
+    new = change_value_html(field, change.get("new"))
+    return f"{html_escape(label)}: {old} -> {new}"
 
 
 def trait_line(label: str, name: Any, rarity: Any) -> str:
@@ -826,6 +852,8 @@ class GiftMonitor:
         self.last_error: str | None = None
         self.last_results: list[CheckResult] = []
         self.error_backoff_until: dict[str, datetime] = {}
+        self.first_error_at: dict[str, datetime] = {}
+        self.stale_error_notified: set[str] = set()
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -890,6 +918,26 @@ class GiftMonitor:
                 lines.append(f"• {gift_link(slug)} - <code>пока не снят</code>")
         return "\n".join(lines)
 
+    def should_notify_error(self, slug: str, previous: dict[str, Any] | None, now: datetime) -> bool:
+        threshold = self.config.monitor.stale_error_notify_seconds
+        if threshold <= 0:
+            return self.config.monitor.notify_errors
+
+        if previous:
+            last_success = parse_iso_datetime(previous.get("taken_at"))
+            if last_success is None:
+                last_success = now
+        else:
+            last_success = self.first_error_at.setdefault(slug, now)
+
+        stale_for = (now - last_success).total_seconds()
+        if stale_for < threshold:
+            return False
+        if slug in self.stale_error_notified:
+            return False
+        self.stale_error_notified.add(slug)
+        return self.config.monitor.notify_errors
+
     async def run_once(
         self,
         manual: bool,
@@ -950,6 +998,9 @@ class GiftMonitor:
             if snapshot is None:
                 raise FetchError("Пустой ответ fetcher")
 
+            self.first_error_at.pop(slug, None)
+            self.stale_error_notified.discard(slug)
+
             if previous is None:
                 self.store.upsert_gift(slug, snapshot)
                 self.store.append_event({"type": "baseline", "slug": slug, "snapshot": snapshot})
@@ -997,8 +1048,15 @@ class GiftMonitor:
             if self.config.monitor.error_backoff_seconds:
                 self.error_backoff_until[slug] = now + timedelta(seconds=self.config.monitor.error_backoff_seconds)
             self.store.append_event({"type": "error", "slug": slug, "error": error})
-            if manual or self.config.monitor.notify_errors:
+            should_notify = manual or self.should_notify_error(slug, previous, now)
+            if should_notify:
                 await self.send_admin_text(f"<b>Ошибка проверки NFT-подарка</b>\n{gift_link(slug)}\n<code>{html_escape(error)}</code>")
+            else:
+                log_check(
+                    "MUTE",
+                    slug,
+                    f"error notification suppressed until gift is stale for {self.config.monitor.stale_error_notify_seconds}s",
+                )
             return CheckResult(slug=slug, ok=False, error=error)
 
     async def send_admin_text(self, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
