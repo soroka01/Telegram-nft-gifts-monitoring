@@ -859,7 +859,7 @@ class GiftMonitor:
         self.stop_event.set()
 
     async def run_loop(self) -> None:
-        await self.send_admin_text(self.startup_text())
+        await self.send_admin_text(self.startup_text(), disable_web_page_preview=True)
         while not self.stop_event.is_set():
             try:
                 await self.run_once(manual=False, notify_no_changes=False)
@@ -1059,7 +1059,12 @@ class GiftMonitor:
                 )
             return CheckResult(slug=slug, ok=False, error=error)
 
-    async def send_admin_text(self, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
+    async def send_admin_text(
+        self,
+        text: str,
+        reply_markup: InlineKeyboardMarkup | None = None,
+        disable_web_page_preview: bool = False,
+    ) -> None:
         chunks = split_message(text)
         for index, chunk in enumerate(chunks):
             for admin_id in self.config.bot.admin_ids:
@@ -1067,7 +1072,7 @@ class GiftMonitor:
                     await self.bot.send_message(
                         admin_id,
                         chunk,
-                        disable_web_page_preview=False,
+                        disable_web_page_preview=disable_web_page_preview,
                         reply_markup=reply_markup if index == len(chunks) - 1 else None,
                     )
                 except TelegramAPIError:
