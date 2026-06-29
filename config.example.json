@@ -5,6 +5,11 @@
       123456789
     ]
   },
+  "telegram": {
+    "api_id": "PUT_API_ID_HERE",
+    "api_hash": "PUT_API_HASH_HERE",
+    "session_name": "state/nft_gift_account"
+  },
   "monitor": {
     "targets": [
       "ExampleGift-12345",
@@ -19,6 +24,8 @@
     "notify_initial_snapshot": true,
     "notify_errors": true,
     "track_image_url": false,
+    "track_sale": true,
+    "mtproto_min_interval_seconds": 60,
     "timezone": "Europe/Moscow",
     "state_path": "state/nft_gift_state.json",
     "events_path": "logs/nft_gift_events.jsonl",

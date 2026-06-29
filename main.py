@@ -12,6 +12,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urljoin
@@ -31,6 +32,12 @@ from aiogram.types import (
     Message,
 )
 from bs4 import BeautifulSoup
+
+try:
+    from telethon import TelegramClient, functions as tg_functions
+except ImportError:  # pragma: no cover - optional sale tracking dependency
+    TelegramClient = None
+    tg_functions = None
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -54,6 +61,28 @@ IGNORED_NOTIFY_FIELDS = {
     "original_footer",
     "owner_photo_url",
 }
+
+SKIP_EVENT_FIELDS = {
+    "quantity_text",
+    "issued_count",
+    "total_count",
+}
+
+SALE_FIELDS = {
+    "sale_active",
+    "sale_price_text",
+    "sale_price_stars",
+    "sale_price_ton",
+}
+
+OWNER_REVEAL_FIELDS = {
+    "owner_telegram_id",
+    "owner_peer_type",
+    "owner_username",
+    "owner_display_name",
+}
+
+MTPROTO_FIELDS = SALE_FIELDS | OWNER_REVEAL_FIELDS
 
 DIFF_FIELDS = {
     "page_status",
@@ -79,6 +108,12 @@ DIFF_FIELDS = {
     "original_date",
     "original_footer",
     "image_url",
+    "sale_active",
+    "sale_price_text",
+    "owner_telegram_id",
+    "owner_peer_type",
+    "owner_username",
+    "owner_display_name",
 }
 
 FIELD_LABELS = {
@@ -105,6 +140,12 @@ FIELD_LABELS = {
     "original_date": "исходная дата",
     "original_footer": "исходные данные",
     "image_url": "картинка",
+    "sale_active": "продажа",
+    "sale_price_text": "цена продажи",
+    "owner_telegram_id": "Telegram ID владельца",
+    "owner_peer_type": "тип владельца",
+    "owner_username": "username владельца",
+    "owner_display_name": "имя владельца из MTProto",
 }
 
 
@@ -123,6 +164,13 @@ class BotConfig:
 
 
 @dataclass(frozen=True)
+class TelegramConfig:
+    api_id: int
+    api_hash: str
+    session_name: Path
+
+
+@dataclass(frozen=True)
 class MonitorConfig:
     targets: list[str]
     interval_seconds: int
@@ -134,6 +182,7 @@ class MonitorConfig:
     notify_initial_snapshot: bool
     notify_errors: bool
     track_image_url: bool
+    mtproto_min_interval_seconds: int
     timezone_name: str
     state_path: Path
     events_path: Path
@@ -144,6 +193,7 @@ class MonitorConfig:
 class AppConfig:
     bot: BotConfig
     monitor: MonitorConfig
+    telegram: TelegramConfig | None
 
 
 @dataclass
@@ -237,6 +287,13 @@ def validate_secret(name: str, value: Any) -> str:
     return text
 
 
+def optional_secret(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text or text.startswith("PUT_") or text.startswith("YOUR_"):
+        return None
+    return text
+
+
 def resolve_path(raw: Any, default: str) -> Path:
     path = Path(str(raw or default).strip())
     if not path.is_absolute():
@@ -247,6 +304,7 @@ def resolve_path(raw: Any, default: str) -> Path:
 def load_config() -> AppConfig:
     raw = load_json(CONFIG_PATH)
     bot_raw = raw.get("bot", {})
+    telegram_raw = raw.get("telegram", {})
     monitor_raw = raw.get("monitor", {})
 
     token = validate_secret("bot.token", env_or_value("BOT_TOKEN", bot_raw.get("token")))
@@ -254,6 +312,23 @@ def load_config() -> AppConfig:
     targets = parse_targets(env_or_value("NFT_GIFT_TARGETS", monitor_raw.get("targets", [])))
     if not targets:
         raise ConfigError("Добавь хотя бы один NFT-подарок в monitor.targets, например ExampleGift-12345.")
+
+    track_sale = parse_bool(monitor_raw.get("track_sale", True), True)
+    telegram: TelegramConfig | None = None
+    if track_sale:
+        api_id_raw = optional_secret(env_or_value("TG_API_ID", telegram_raw.get("api_id")))
+        api_hash = optional_secret(env_or_value("TG_API_HASH", telegram_raw.get("api_hash")))
+        if api_id_raw and api_hash:
+            try:
+                api_id = int(api_id_raw)
+            except (TypeError, ValueError) as exc:
+                raise ConfigError("telegram.api_id должен быть числом.") from exc
+            session_raw = env_or_value("TG_SESSION_NAME", telegram_raw.get("session_name"))
+            telegram = TelegramConfig(
+                api_id=api_id,
+                api_hash=api_hash,
+                session_name=resolve_path(session_raw, "state/nft_gift_account"),
+            )
 
     monitor = MonitorConfig(
         targets=targets,
@@ -266,12 +341,13 @@ def load_config() -> AppConfig:
         notify_initial_snapshot=parse_bool(monitor_raw.get("notify_initial_snapshot", True), True),
         notify_errors=parse_bool(monitor_raw.get("notify_errors", True), True),
         track_image_url=parse_bool(monitor_raw.get("track_image_url", False), False),
+        mtproto_min_interval_seconds=max(0, int(monitor_raw.get("mtproto_min_interval_seconds", 60))),
         timezone_name=str(monitor_raw.get("timezone", "Europe/Moscow")),
         state_path=resolve_path(monitor_raw.get("state_path"), "state/nft_gift_state.json"),
         events_path=resolve_path(monitor_raw.get("events_path"), "logs/nft_gift_events.jsonl"),
         user_agent=str(monitor_raw.get("user_agent") or "Mozilla/5.0"),
     )
-    return AppConfig(bot=BotConfig(token=token, admin_ids=admin_ids), monitor=monitor)
+    return AppConfig(bot=BotConfig(token=token, admin_ids=admin_ids), monitor=monitor, telegram=telegram)
 
 
 def ensure_dirs(config: AppConfig) -> None:
@@ -295,7 +371,7 @@ def setup_logging(config: AppConfig) -> None:
         handlers=[console_handler, file_handler],
         force=True,
     )
-    for logger_name in ("httpx", "httpcore", "aiogram", "aiohttp"):
+    for logger_name in ("httpx", "httpcore", "aiogram", "aiohttp", "telethon"):
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
@@ -554,6 +630,14 @@ def parse_gift_html(slug: str, content: str, response: httpx.Response) -> dict[s
         "original_recipient": None,
         "original_date": None,
         "original_footer": None,
+        "sale_active": None,
+        "sale_price_text": None,
+        "sale_price_stars": None,
+        "sale_price_ton": None,
+        "owner_telegram_id": None,
+        "owner_peer_type": None,
+        "owner_username": None,
+        "owner_display_name": None,
     }
 
     table_found = False
@@ -630,13 +714,29 @@ def all_diff_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def copy_previous_mtproto_fields(snapshot: dict[str, Any], previous: dict[str, Any] | None) -> None:
+    if not previous:
+        return
+    previous_gift = previous.get("gift", {})
+    gift = snapshot.setdefault("gift", {})
+    for field in MTPROTO_FIELDS:
+        if field in previous_gift:
+            gift[field] = previous_gift.get(field)
+
+
 def diff_snapshots(old: dict[str, Any], new: dict[str, Any], track_image_url: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     old_all = all_diff_payload(old)
     new_all = all_diff_payload(new)
+    old_gift = old.get("gift", {})
+    new_gift = new.get("gift", {})
     all_changes: list[dict[str, Any]] = []
     for field in sorted(set(old_all) | set(new_all)):
         old_value = old_all.get(field)
         new_value = new_all.get(field)
+        if field in SALE_FIELDS and field not in old_gift and field in new_gift and new_gift.get("sale_active") is False:
+            continue
+        if field in OWNER_REVEAL_FIELDS and field not in old_gift and field in new_gift and new_value is None:
+            continue
         if old_value != new_value:
             all_changes.append({"field": field, "old": old_value, "new": new_value})
 
@@ -647,22 +747,182 @@ def diff_snapshots(old: dict[str, Any], new: dict[str, Any], track_image_url: bo
     return all_changes, notify_changes
 
 
+def should_store_change_event(changes: list[dict[str, Any]]) -> bool:
+    changed_fields = {str(change.get("field")) for change in changes}
+    return bool(changed_fields) and not changed_fields.issubset(SKIP_EVENT_FIELDS)
+
+
+def format_decimal(value: Decimal) -> str:
+    normalized = value.normalize()
+    text = format(normalized, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def format_stars_amount(amount: Any) -> str:
+    whole = Decimal(int(getattr(amount, "amount", 0)))
+    nanos = Decimal(int(getattr(amount, "nanos", 0))) / Decimal(1_000_000_000)
+    return format_decimal(whole + nanos)
+
+
+def format_ton_amount(amount: Any) -> str:
+    nanotons = Decimal(int(getattr(amount, "amount", 0)))
+    return format_decimal(nanotons / Decimal(1_000_000_000))
+
+
+def sale_info_from_unique_gift(gift: Any) -> dict[str, Any]:
+    stars_price: str | None = None
+    ton_price: str | None = None
+    for amount in getattr(gift, "resell_amount", None) or []:
+        amount_type = type(amount).__name__
+        if amount_type == "StarsAmount":
+            stars_price = format_stars_amount(amount)
+        elif amount_type == "StarsTonAmount":
+            ton_price = format_ton_amount(amount)
+
+    price_parts: list[str] = []
+    if stars_price is not None:
+        price_parts.append(f"{stars_price} Stars")
+    if ton_price is not None:
+        price_parts.append(f"{ton_price} TON")
+
+    return {
+        "sale_active": bool(price_parts),
+        "sale_price_text": " / ".join(price_parts) if price_parts else None,
+        "sale_price_stars": stars_price,
+        "sale_price_ton": ton_price,
+    }
+
+
+def peer_identity(peer: Any) -> tuple[str | None, int | None]:
+    if peer is None:
+        return None, None
+    if hasattr(peer, "user_id"):
+        return "user", int(peer.user_id)
+    if hasattr(peer, "channel_id"):
+        return "channel", int(peer.channel_id)
+    if hasattr(peer, "chat_id"):
+        return "chat", int(peer.chat_id)
+    return type(peer).__name__, getattr(peer, "id", None)
+
+
+def display_name_from_user(user: Any) -> str | None:
+    parts = [
+        clean_text(getattr(user, "first_name", None)),
+        clean_text(getattr(user, "last_name", None)),
+    ]
+    name = " ".join(part for part in parts if part)
+    return name or None
+
+
+def owner_info_from_unique_gift(result: Any) -> dict[str, Any]:
+    gift = result.gift
+    peer_type, peer_id = peer_identity(getattr(gift, "owner_id", None))
+    username: str | None = None
+    display_name = clean_text(getattr(gift, "owner_name", None)) or None
+
+    if peer_id is not None:
+        entities = getattr(result, "users", None) or []
+        if peer_type in {"channel", "chat"}:
+            entities = getattr(result, "chats", None) or []
+        for entity in entities:
+            if int(getattr(entity, "id", 0) or 0) != peer_id:
+                continue
+            username = clean_text(getattr(entity, "username", None)) or None
+            display_name = (
+                display_name_from_user(entity)
+                or clean_text(getattr(entity, "title", None))
+                or display_name
+            )
+            break
+
+    return {
+        "owner_telegram_id": peer_id,
+        "owner_peer_type": peer_type,
+        "owner_username": username,
+        "owner_display_name": display_name,
+    }
+
+
+def mtproto_info_from_unique_gift(result: Any) -> dict[str, Any]:
+    return {
+        **sale_info_from_unique_gift(result.gift),
+        **owner_info_from_unique_gift(result),
+    }
+
+
+class TelegramSaleResolver:
+    def __init__(self, config: TelegramConfig | None, min_interval_seconds: int) -> None:
+        self.config = config
+        self.min_interval_seconds = min_interval_seconds
+        self.client: Any | None = None
+        self.cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return self.config is not None and TelegramClient is not None and tg_functions is not None
+
+    async def close(self) -> None:
+        if self.client is not None:
+            try:
+                await self.client.disconnect()
+            except Exception as exc:
+                LOGGER.warning("Telethon disconnect failed: %s: %s", type(exc).__name__, exc)
+            self.client = None
+
+    async def _ensure_client(self) -> Any:
+        if self.config is None:
+            raise FetchError("MTProto sale tracking is not configured")
+        if TelegramClient is None or tg_functions is None:
+            raise FetchError("Установи telethon для отслеживания продажи NFT")
+        if self.client is None:
+            self.client = TelegramClient(
+                str(self.config.session_name),
+                self.config.api_id,
+                self.config.api_hash,
+            )
+            try:
+                await self.client.connect()
+            except Exception:
+                self.client = None
+                raise
+        if not await self.client.is_user_authorized():
+            raise FetchError(f"Telethon session is not authorized: {self.config.session_name}")
+        return self.client
+
+    async def fetch(self, slug: str) -> dict[str, Any]:
+        cached = self.cache.get(slug)
+        now = time.monotonic()
+        if cached and self.min_interval_seconds and now - cached[0] < self.min_interval_seconds:
+            return dict(cached[1])
+
+        client = await self._ensure_client()
+        result = await client(tg_functions.payments.GetUniqueStarGiftRequest(slug=slug))
+        info = mtproto_info_from_unique_gift(result)
+        self.cache[slug] = (now, info)
+        return dict(info)
+
+
 class GiftFetcher:
-    def __init__(self, config: MonitorConfig) -> None:
+    def __init__(self, config: AppConfig) -> None:
+        monitor = config.monitor
         headers = {
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "accept-language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
             "cache-control": "no-cache",
-            "user-agent": config.user_agent,
+            "user-agent": monitor.user_agent,
         }
         self.client = httpx.AsyncClient(
             headers=headers,
-            timeout=httpx.Timeout(config.request_timeout_seconds),
+            timeout=httpx.Timeout(monitor.request_timeout_seconds),
             follow_redirects=True,
         )
+        self.sale_resolver = TelegramSaleResolver(config.telegram, monitor.mtproto_min_interval_seconds)
+        if config.telegram is not None and not self.sale_resolver.enabled:
+            LOGGER.warning("Sale tracking is configured but telethon is not installed")
 
     async def close(self) -> None:
         await self.client.aclose()
+        await self.sale_resolver.close()
 
     async def fetch(self, slug: str, previous: dict[str, Any] | None = None) -> FetchResult:
         headers: dict[str, str] = {}
@@ -683,6 +943,13 @@ class GiftFetcher:
             raise FetchError(f"HTTP {response.status_code}")
 
         snapshot = parse_gift_html(slug, response.text, response)
+        if self.sale_resolver.enabled:
+            try:
+                snapshot["gift"].update(await self.sale_resolver.fetch(slug))
+            except Exception as exc:
+                LOGGER.warning("Sale lookup failed for %s: %s: %s", slug, type(exc).__name__, exc)
+                copy_previous_mtproto_fields(snapshot, previous)
+            snapshot["digest"] = stable_hash(watched_payload(snapshot, track_image_url=True))
         return FetchResult(snapshot=snapshot, status_code=response.status_code)
 
 
@@ -716,6 +983,11 @@ def telegram_profile_link(value: Any) -> str | None:
 def change_value_html(field: str, value: Any) -> str:
     if value in (None, ""):
         return "нет"
+    if field == "sale_active":
+        return code_text("выставлен" if value else "не выставлен")
+    if field == "owner_username":
+        username = str(value).strip().lstrip("@")
+        return f'<a href="https://t.me/{html_attr(username)}">@{html_escape(username)}</a>'
     if field == "owner_url":
         profile_link = telegram_profile_link(value)
         if profile_link:
@@ -744,6 +1016,15 @@ def display_quantity(value: Any) -> str:
     return text or "нет"
 
 
+def display_sale(gift: dict[str, Any]) -> str | None:
+    sale_active = gift.get("sale_active")
+    if sale_active is None:
+        return None
+    if not sale_active:
+        return "не выставлен"
+    return f"выставлен за {value_text(gift.get('sale_price_text'))}"
+
+
 def format_snapshot_summary(snapshot: dict[str, Any], tz: timezone | ZoneInfo, title: str = "Снимок NFT-подарка") -> str:
     gift = snapshot.get("gift", {})
     lines = [
@@ -758,6 +1039,15 @@ def format_snapshot_summary(snapshot: dict[str, Any], tz: timezone | ZoneInfo, t
         trait_line("символ", gift.get("symbol_name"), gift.get("symbol_rarity")),
         f"кол-во: {html_escape(display_quantity(gift.get('quantity_text')))}",
     ]
+    if gift.get("owner_telegram_id"):
+        owner_type = value_text(gift.get("owner_peer_type"))
+        owner_id = value_text(gift.get("owner_telegram_id"))
+        lines.append(f"Telegram ID владельца: <code>{html_escape(owner_id)}</code> ({html_escape(owner_type)})")
+    if gift.get("owner_username"):
+        lines.append(f"username владельца: {change_value_html('owner_username', gift.get('owner_username'))}")
+    sale = display_sale(gift)
+    if sale is not None:
+        lines.append(f"продажа: {html_escape(sale)}")
     if gift.get("original_footer"):
         lines.append(f"исходные данные: {html_escape(gift.get('original_footer'))}")
     return "\n".join(lines)
@@ -1015,15 +1305,16 @@ class GiftMonitor:
             self.store.upsert_gift(slug, snapshot)
             if all_changes:
                 event_type = "change" if notify_changes else "ignored_change"
-                self.store.append_event(
-                    {
-                        "type": event_type,
-                        "slug": slug,
-                        "changes": all_changes,
-                        "notify_changes": notify_changes,
-                        "snapshot": snapshot,
-                    }
-                )
+                if should_store_change_event(all_changes):
+                    self.store.append_event(
+                        {
+                            "type": event_type,
+                            "slug": slug,
+                            "changes": all_changes,
+                            "notify_changes": notify_changes,
+                            "snapshot": snapshot,
+                        }
+                    )
                 if notify_changes:
                     log_check("CHANGE", slug, f"{len(notify_changes)} notify / {len(all_changes)} total changes", started_at)
                     await self.send_admin_text(format_diff(snapshot, notify_changes, self.tz))
@@ -1243,7 +1534,7 @@ async def main() -> None:
     setup_logging(config)
 
     store = StateStore(config.monitor.state_path, config.monitor.events_path)
-    fetcher = GiftFetcher(config.monitor)
+    fetcher = GiftFetcher(config)
     bot = Bot(config.bot.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     monitor = GiftMonitor(config, store, fetcher, bot)
     dp = Dispatcher()
