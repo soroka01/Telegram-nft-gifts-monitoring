@@ -943,6 +943,13 @@ class GiftFetcher:
             raise FetchError(f"HTTP {response.status_code}")
 
         snapshot = parse_gift_html(slug, response.text, response)
+        if previous and previous.get("page_status") == "ok" and snapshot.get("page_status") == "no_gift_table":
+            LOGGER.warning(
+                "Skipping transient non-gift page for %s: title=%r",
+                slug,
+                snapshot.get("gift", {}).get("title"),
+            )
+            return FetchResult(snapshot=None, not_modified=True, status_code=response.status_code)
         if self.sale_resolver.enabled:
             try:
                 snapshot["gift"].update(await self.sale_resolver.fetch(slug))
