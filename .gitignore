@@ -1,6 +1,9 @@
 config.json
 config.local.json
 *.local.json
+.env
+*.session
+*.session-journal
 .venv/
 venv/
 env/
