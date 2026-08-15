@@ -4,7 +4,7 @@
 
 🌐 **Язык:** [Русский](README.md) · [English](README_EN.md)
 
-![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=white)
 ![aiogram](https://img.shields.io/badge/aiogram-Telegram_bot-26A5E4?logo=telegram&logoColor=white)
 ![Data sources](https://img.shields.io/badge/Data-public_web_%2B_optional_MTProto-6F42C1)
 ![MIT License](https://img.shields.io/badge/License-MIT-2EA44F.svg)
@@ -61,7 +61,8 @@ normalized snapshot + diff
 
 ## 📋 Требования
 
-- Python 3.10 или новее;
+- Python 3.14 или новее (рекомендуется актуальный патч 3.14.6);
+- pip 26.1.2, setuptools 84.0.0 и wheel 0.48.0 (launcher обновляет их автоматически);
 - Telegram-бот от [@BotFather](https://t.me/BotFather);
 - Telegram user ID каждого администратора;
 - хотя бы один NFT slug или полная ссылка;

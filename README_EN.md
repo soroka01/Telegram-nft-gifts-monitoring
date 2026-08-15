@@ -4,7 +4,7 @@
 
 🌐 **Language:** [Русский](README.md) · [English](README_EN.md)
 
-![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=white)
 ![aiogram](https://img.shields.io/badge/aiogram-Telegram_bot-26A5E4?logo=telegram&logoColor=white)
 ![Data sources](https://img.shields.io/badge/Data-public_web_%2B_optional_MTProto-6F42C1)
 ![MIT License](https://img.shields.io/badge/License-MIT-2EA44F.svg)
@@ -61,7 +61,8 @@ The first successful snapshot becomes the baseline. Every later successful check
 
 ## 📋 Requirements
 
-- Python 3.10 or newer;
+- Python 3.14 or newer (the latest 3.14.6 patch is recommended);
+- pip 26.1.2, setuptools 84.0.0, and wheel 0.48.0 (the launcher upgrades them automatically);
 - a Telegram bot from [@BotFather](https://t.me/BotFather);
 - the Telegram user ID of each administrator;
 - at least one NFT slug or full URL;
