@@ -9,5 +9,6 @@ venv/
 env/
 state/
 logs/
+*.bak
 __pycache__/
 *.pyc

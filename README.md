@@ -76,6 +76,7 @@ normalized snapshot + diff
 | `httpx` | Асинхронные HTTP-запросы |
 | `beautifulsoup4` | Разбор публичной NFT-страницы |
 | `telethon` | Опциональное MTProto enrichment |
+| `qrcode[pil]` | QR-авторизация MTProto session |
 | `tzdata` | IANA timezones на системах без системной базы |
 
 ## ⚙️ Установка и запуск
@@ -99,7 +100,7 @@ start.bat
 2. скопирует `config.example.json` в `config.json`;
 3. остановится, чтобы вы заполнили конфигурацию.
 
-После настройки повторно запустите `start.bat`. Он установит зависимости и запустит монитор.
+После настройки MTProto остановите монитор, запустите `login.bat` и отсканируйте QR через Telegram: **Настройки → Устройства → Подключить устройство**. Затем повторно запустите `start.bat`.
 
 ### 3. Ручной запуск
 
@@ -184,9 +185,9 @@ python main.py
 }
 ```
 
-`track_sale = true` включает MTProto только когда `api_id` и `api_hash` заполнены. Репозиторий не создаёт и не авторизует user session автоматически: файл, указанный в `session_name`, должен быть заранее авторизован через Telethon. Без него HTTP monitoring продолжит работу, но sale/owner enrichment будет недоступен и появится warning в log.
+`track_sale = true` включает MTProto только когда `api_id` и `api_hash` заполнены. Для создания или восстановления session остановите `start.bat` и запустите `login.bat`. Без авторизованной session HTTP monitoring продолжит работу, но sale/owner enrichment будет недоступен.
 
-Не используйте одну SQLite session одновременно в нескольких процессах.
+Не используйте одну SQLite session одновременно в нескольких процессах или с разных IP. При `AuthKeyDuplicatedError` монитор отключает MTProto lookup до перезапуска и сохраняет предыдущие sale/owner-поля. `login.bat` архивирует отозванную session как `.bak` и создаёт новую через QR.
 
 ### Monitor
 
@@ -245,6 +246,7 @@ python main.py
 | `logs/gifts/<slug>/nft_gift_events.jsonl` | Та же лента для одного подарка |
 | `logs/monitor.log` | Технический runtime log |
 | `state/nft_gift_account.session` | Опциональная Telethon session |
+| `state/nft_gift_account.session.invalid-*.bak` | Архив отозванной session после восстановления |
 
 Изменения quantity/issued/total обновляют state и видны в техническом log, но если изменились только эти поля, отдельный JSONL event не создаётся. Original details и avatar URL сами не вызывают Telegram alert: при отдельном изменении они пишутся как `ignored_change`, а при одновременном значимом изменении входят в общий JSONL event. Image URL вызывает alert только при `track_image_url = true`.
 
@@ -277,7 +279,7 @@ python main.py
 2. Замените token, admin ID и targets placeholders.
 3. Установите зависимости: `python -m pip install -r requirements.txt`.
 4. Для HTTP-only явно установите `track_sale` в `false`.
-5. Для MTProto проверьте `api_id`, `api_hash`, путь и авторизацию session.
+5. Для MTProto проверьте `api_id`, `api_hash` и путь session; для входа или `AuthKeyDuplicatedError` остановите монитор и запустите `login.bat`.
 6. Изучите `logs/monitor.log`.
 
 ## 📄 Лицензия

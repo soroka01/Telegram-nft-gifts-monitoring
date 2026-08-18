@@ -35,9 +35,13 @@ from bs4 import BeautifulSoup
 
 try:
     from telethon import TelegramClient, functions as tg_functions
+    from telethon.errors import AuthKeyDuplicatedError
 except ImportError:  # pragma: no cover - optional sale tracking dependency
     TelegramClient = None
     tg_functions = None
+
+    class AuthKeyDuplicatedError(Exception):
+        pass
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -109,7 +113,7 @@ DIFF_FIELDS = {
     "original_footer",
     "image_url",
     "sale_active",
-    "sale_price_text",
+    "sale_price_stars",
     "owner_telegram_id",
     "owner_peer_type",
     "owner_username",
@@ -141,7 +145,7 @@ FIELD_LABELS = {
     "original_footer": "исходные данные",
     "image_url": "картинка",
     "sale_active": "продажа",
-    "sale_price_text": "цена продажи",
+    "sale_price_stars": "цена продажи",
     "owner_telegram_id": "Telegram ID владельца",
     "owner_peer_type": "тип владельца",
     "owner_username": "username владельца",
@@ -254,7 +258,7 @@ def normalize_slug(value: Any) -> str:
     if not text:
         return ""
     text = text.rstrip("/")
-    if "t.me/nft/" in text:
+    if "telegram.me/nft/" in text:
         text = text.rsplit("/", 1)[-1]
     if text.startswith("tg://nft?slug="):
         text = text.split("slug=", 1)[-1].split("&", 1)[0]
@@ -438,7 +442,7 @@ def stable_hash(value: Any) -> str:
 
 
 def gift_url(slug: str) -> str:
-    return f"https://t.me/nft/{slug}"
+    return f"https://telegram.me/nft/{slug}"
 
 
 def safe_dir_name(value: Any) -> str:
@@ -561,10 +565,10 @@ def parse_owner_cell(cell: Any) -> dict[str, Any]:
         owner["owner_address"] = clean_text(address.get_text(" ")) or None
     link = cell.find("a", href=True)
     if link:
-        owner["owner_url"] = urljoin("https://t.me/", link["href"])
+        owner["owner_url"] = urljoin("https://telegram.me/", link["href"])
     image = cell.find("img", src=True)
     if image:
-        owner["owner_photo_url"] = urljoin("https://t.me/", image["src"])
+        owner["owner_photo_url"] = urljoin("https://telegram.me/", image["src"])
     return owner
 
 
@@ -584,7 +588,7 @@ def parse_original_footer(footer: Any) -> dict[str, Any]:
     link = footer.find("a", href=True)
     if link:
         data["original_sender"] = clean_text(link.get_text(" ")) or None
-        data["original_sender_url"] = urljoin("https://t.me/", link["href"])
+        data["original_sender_url"] = urljoin("https://telegram.me/", link["href"])
 
     match = re.match(r"Gifted by (.*?) to (.*?) on (.*)$", text)
     if match:
@@ -714,6 +718,46 @@ def all_diff_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def split_slug_collection(value: str) -> str:
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", value)
+    text = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", text)
+    return clean_text(text)
+
+
+def slug_metadata(slug: Any) -> dict[str, Any] | None:
+    match = re.match(r"^(?P<collection>[A-Za-z0-9]+)-(?P<number>\d+)$", str(slug or ""))
+    if not match:
+        return None
+    collection = split_slug_collection(match.group("collection"))
+    number = int(match.group("number"))
+    return {
+        "slug_title": f"{match.group('collection')}-{number}",
+        "title": f"{collection} #{number}",
+        "collection": collection,
+        "number": number,
+    }
+
+
+def metadata_value_matches(field: str, value: Any, metadata: dict[str, Any]) -> bool:
+    if field == "title":
+        return clean_text(value) in {metadata["slug_title"], metadata["title"]}
+    if field == "collection":
+        return value in (None, "", metadata["collection"])
+    if field == "number":
+        return value in (None, "", metadata["number"], str(metadata["number"]))
+    return False
+
+
+def is_slug_metadata_noise(change: dict[str, Any], old: dict[str, Any], new: dict[str, Any]) -> bool:
+    field = str(change.get("field"))
+    if field not in {"title", "collection", "number"}:
+        return False
+    metadata = slug_metadata(new.get("slug") or old.get("slug"))
+    if metadata is None:
+        return False
+    return metadata_value_matches(field, change.get("old"), metadata) and metadata_value_matches(field, change.get("new"), metadata)
+
+
 def copy_previous_mtproto_fields(snapshot: dict[str, Any], previous: dict[str, Any] | None) -> None:
     if not previous:
         return
@@ -743,7 +787,11 @@ def diff_snapshots(old: dict[str, Any], new: dict[str, Any], track_image_url: bo
     ignored_fields = set(IGNORED_NOTIFY_FIELDS)
     if not track_image_url:
         ignored_fields.add("image_url")
-    notify_changes = [change for change in all_changes if change["field"] not in ignored_fields]
+    notify_changes = [
+        change
+        for change in all_changes
+        if change["field"] not in ignored_fields and not is_slug_metadata_noise(change, old, new)
+    ]
     return all_changes, notify_changes
 
 
@@ -856,10 +904,15 @@ class TelegramSaleResolver:
         self.min_interval_seconds = min_interval_seconds
         self.client: Any | None = None
         self.cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.disabled_reason: str | None = None
+
+    @property
+    def configured(self) -> bool:
+        return self.config is not None and TelegramClient is not None and tg_functions is not None
 
     @property
     def enabled(self) -> bool:
-        return self.config is not None and TelegramClient is not None and tg_functions is not None
+        return self.configured and self.disabled_reason is None
 
     async def close(self) -> None:
         if self.client is not None:
@@ -882,6 +935,18 @@ class TelegramSaleResolver:
             )
             try:
                 await self.client.connect()
+            except AuthKeyDuplicatedError:
+                self.disabled_reason = (
+                    "Telegram аннулировал MTProto session key из-за использования с разных IP. "
+                    "Останови монитор и запусти login.bat для создания новой отдельной сессии."
+                )
+                try:
+                    if self.client.is_connected():
+                        await self.client.disconnect()
+                except Exception:
+                    pass
+                self.client = None
+                raise FetchError(self.disabled_reason) from None
             except Exception:
                 self.client = None
                 raise
@@ -950,11 +1015,15 @@ class GiftFetcher:
                 snapshot.get("gift", {}).get("title"),
             )
             return FetchResult(snapshot=None, not_modified=True, status_code=response.status_code)
-        if self.sale_resolver.enabled:
-            try:
-                snapshot["gift"].update(await self.sale_resolver.fetch(slug))
-            except Exception as exc:
-                LOGGER.warning("Sale lookup failed for %s: %s: %s", slug, type(exc).__name__, exc)
+        if self.sale_resolver.config is not None:
+            if self.sale_resolver.enabled:
+                try:
+                    snapshot["gift"].update(await self.sale_resolver.fetch(slug))
+                except Exception as exc:
+                    log = LOGGER.error if self.sale_resolver.disabled_reason else LOGGER.warning
+                    log("Sale lookup failed for %s: %s: %s", slug, type(exc).__name__, exc)
+                    copy_previous_mtproto_fields(snapshot, previous)
+            else:
                 copy_previous_mtproto_fields(snapshot, previous)
             snapshot["digest"] = stable_hash(watched_payload(snapshot, track_image_url=True))
         return FetchResult(snapshot=snapshot, status_code=response.status_code)
@@ -978,13 +1047,13 @@ def telegram_profile_link(value: Any) -> str | None:
     text = str(value or "").strip()
     if not text:
         return None
-    match = re.match(r"^https?://t\.me/([A-Za-z0-9_]{5,32})/?$", text)
+    match = re.match(r"^https?://telegram\.me/([A-Za-z0-9_]{5,32})/?$", text)
     if not match:
-        match = re.match(r"^t\.me/([A-Za-z0-9_]{5,32})/?$", text)
+        match = re.match(r"^telegram\.me/([A-Za-z0-9_]{5,32})/?$", text)
     if not match:
         return None
     username = match.group(1)
-    return f'<a href="https://t.me/{html_attr(username)}">@{html_escape(username)}</a>'
+    return f'<a href="https://telegram.me/{html_attr(username)}">@{html_escape(username)}</a>'
 
 
 def change_value_html(field: str, value: Any) -> str:
@@ -992,9 +1061,11 @@ def change_value_html(field: str, value: Any) -> str:
         return "нет"
     if field == "sale_active":
         return code_text("выставлен" if value else "не выставлен")
+    if field == "sale_price_stars":
+        return code_text(f"{value_text(value)} Stars")
     if field == "owner_username":
         username = str(value).strip().lstrip("@")
-        return f'<a href="https://t.me/{html_attr(username)}">@{html_escape(username)}</a>'
+        return f'<a href="https://telegram.me/{html_attr(username)}">@{html_escape(username)}</a>'
     if field == "owner_url":
         profile_link = telegram_profile_link(value)
         if profile_link:
@@ -1406,7 +1477,7 @@ def help_text() -> str:
         "/check ExampleGift-12345 - разово проверить один подарок\n"
         "/snapshot ExampleGift-12345 - показать последний снимок из state\n\n"
         "В config указывай slug подарка, например <code>ExampleGift-12345</code>. "
-        "Ссылка строится как <code>https://t.me/nft/ExampleGift-12345</code>."
+        "Ссылка строится как <code>https://telegram.me/nft/ExampleGift-12345</code>."
     )
 
 

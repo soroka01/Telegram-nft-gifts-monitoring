@@ -76,6 +76,7 @@ Main dependencies:
 | `httpx` | Asynchronous HTTP requests |
 | `beautifulsoup4` | Public NFT page parsing |
 | `telethon` | Optional MTProto enrichment |
+| `qrcode[pil]` | QR authorization for the MTProto session |
 | `tzdata` | IANA time zones on systems without a system database |
 
 ## ⚙️ Installation and Running
@@ -99,7 +100,7 @@ On its first run, the launcher:
 2. copies `config.example.json` to `config.json`;
 3. exits so you can fill in the configuration.
 
-Run `start.bat` again after configuration. It installs dependencies and starts the monitor.
+After configuring MTProto, stop the monitor, run `login.bat`, and scan the QR through Telegram: **Settings → Devices → Link Desktop Device**. Then run `start.bat` again.
 
 ### 3. Manual start
 
@@ -184,9 +185,9 @@ Replace both the token and the example ID. The monitor accepts commands from and
 }
 ```
 
-`track_sale = true` enables MTProto only when both `api_id` and `api_hash` are filled in. The repository does not create or authorize a user session automatically: the file selected by `session_name` must already be authorized through Telethon. Without it, HTTP monitoring continues, but sale/owner enrichment is unavailable and the log contains a warning.
+`track_sale = true` enables MTProto only when both `api_id` and `api_hash` are filled in. To create or recover the session, stop `start.bat` and run `login.bat`. Without an authorized session, HTTP monitoring continues but sale/owner enrichment is unavailable.
 
-Do not use the same SQLite session from multiple processes at the same time.
+Do not use one SQLite session from multiple processes or different IPs. On `AuthKeyDuplicatedError`, the monitor disables MTProto lookup until restart and preserves the previous sale/owner fields. `login.bat` archives the revoked session as `.bak` and creates a new one through QR.
 
 ### Monitor
 
@@ -245,6 +246,7 @@ Users outside `admin_ids` receive an access-denied response.
 | `logs/gifts/<slug>/nft_gift_events.jsonl` | The same stream for one gift |
 | `logs/monitor.log` | Technical runtime log |
 | `state/nft_gift_account.session` | Optional Telethon session |
+| `state/nft_gift_account.session.invalid-*.bak` | Revoked session archive created during recovery |
 
 Quantity/issued/total changes update state and appear in the technical log, but no separate JSONL event is written when only those fields change. Original details and avatar URLs do not trigger alerts: on their own they are written as `ignored_change`, and alongside a significant change they are included in the shared JSONL event. Image URL changes alert only when `track_image_url = true`.
 
@@ -277,7 +279,7 @@ If the monitor does not start:
 2. Replace token, admin ID, and target placeholders.
 3. Install dependencies with `python -m pip install -r requirements.txt`.
 4. Set `track_sale` to `false` explicitly for HTTP-only mode.
-5. For MTProto, verify the `api_id`, `api_hash`, session path, and authorization.
+5. For MTProto, verify `api_id`, `api_hash`, and the session path; for login or `AuthKeyDuplicatedError`, stop the monitor and run `login.bat`.
 6. Read `logs/monitor.log`.
 
 ## 📄 License
