@@ -1,28 +1,23 @@
 # 🎁 Telegram NFT Gift Monitor
 
-> Telegram-бот для отслеживания конкретных NFT-подарков по публичным страницам t.me с опциональным MTProto-обогащением данных о продаже и владельце.
+> Telegram-бот для отслеживания конкретных NFT-подарков по публичным страницам t.me.
 
 🌐 **Язык:** [Русский](README.md) · [English](README_EN.md)
 
 ![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=white)
 ![aiogram](https://img.shields.io/badge/aiogram-Telegram_bot-26A5E4?logo=telegram&logoColor=white)
-![Data sources](https://img.shields.io/badge/Data-public_web_%2B_optional_MTProto-6F42C1)
+![Data sources](https://img.shields.io/badge/Data-public_web-6F42C1)
 ![MIT License](https://img.shields.io/badge/License-MIT-2EA44F.svg)
 
 ## ✨ Обзор
 
-Telegram NFT Gift Monitor проверяет подарки вида `ExampleGift-12345`, сохраняет их последние снимки и уведомляет администраторов об изменениях. Основной режим читает публичную страницу `https://t.me/nft/<slug>` и не требует пользовательского Telegram-аккаунта.
-
-Дополнительно монитор умеет обогащать снимок через MTProto: получать активную цену перепродажи и Telegram identity владельца. Этот режим требует `api_id`, `api_hash` и уже авторизованную Telethon session.
+Telegram NFT Gift Monitor проверяет подарки вида `ExampleGift-12345`, сохраняет их последние снимки и уведомляет администраторов об изменениях. Монитор читает публичную страницу `https://t.me/nft/<slug>` и не требует пользовательского Telegram-аккаунта.
 
 ## 🧭 Режимы работы
 
 | Режим | Что требуется | Данные |
 | --- | --- | --- |
 | HTTP-only | Bot token | Публичная NFT-страница, traits, владелец, TON address, original details |
-| HTTP + MTProto | Bot token, API credentials, авторизованная user session | Всё из HTTP и дополнительно sale price и Telegram identity владельца |
-
-Если `telegram.api_id` или `telegram.api_hash` остаются placeholder, монитор продолжает работать в HTTP-only режиме. Чтобы выбрать этот режим явно, установите `track_sale` в `false`.
 
 ## 🚀 Возможности
 
@@ -32,8 +27,6 @@ Telegram NFT Gift Monitor проверяет подарки вида `ExampleGif
 - модель, фон, символ и их rarity;
 - количество выпущенных подарков и исходные сведения;
 - опциональное отслеживание image URL;
-- опциональные sale status и цена в Stars/TON через MTProto;
-- опциональные Telegram ID, peer type, username и display name владельца;
 - ETag и Last-Modified для условных HTTP-запросов;
 - отдельный backoff для каждого подарка;
 - отложенные error alerts только после заданного периода без успешного снимка;
@@ -47,8 +40,7 @@ config.json
     │
     ▼
 main.py
-    ├── t.me/nft/<slug> ───────── public HTML snapshot
-    └── Telethon (optional) ───── sale + owner enrichment
+    └── t.me/nft/<slug> ───────── public HTML snapshot
     │
     ▼
 normalized snapshot + diff
@@ -65,8 +57,7 @@ normalized snapshot + diff
 - pip 26.1.2, setuptools 84.0.0 и wheel 0.48.0 (launcher обновляет их автоматически);
 - Telegram-бот от [@BotFather](https://t.me/BotFather);
 - Telegram user ID каждого администратора;
-- хотя бы один NFT slug или полная ссылка;
-- для MTProto-режима: Telegram `api_id`, `api_hash` и авторизованная Telethon session.
+- хотя бы один NFT slug или полная ссылка.
 
 Основные зависимости:
 
@@ -75,8 +66,6 @@ normalized snapshot + diff
 | `aiogram` | Bot API, команды и inline keyboard |
 | `httpx` | Асинхронные HTTP-запросы |
 | `beautifulsoup4` | Разбор публичной NFT-страницы |
-| `telethon` | Опциональное MTProto enrichment |
-| `qrcode[pil]` | QR-авторизация MTProto session |
 | `tzdata` | IANA timezones на системах без системной базы |
 
 ## ⚙️ Установка и запуск
@@ -99,8 +88,6 @@ start.bat
 1. создаст `.venv`;
 2. скопирует `config.example.json` в `config.json`;
 3. остановится, чтобы вы заполнили конфигурацию.
-
-После настройки MTProto остановите монитор, запустите `login.bat` и отсканируйте QR через Telegram: **Настройки → Устройства → Подключить устройство**. Затем повторно запустите `start.bat`.
 
 ### 3. Ручной запуск
 
@@ -169,26 +156,6 @@ python main.py
 
 Замените и token, и пример ID. Монитор принимает команды и отправляет уведомления только пользователям из `admin_ids`.
 
-### MTProto — опционально
-
-```json
-{
-  "telegram": {
-    "api_id": "PUT_API_ID_HERE",
-    "api_hash": "PUT_API_HASH_HERE",
-    "session_name": "state/nft_gift_account"
-  },
-  "monitor": {
-    "track_sale": true,
-    "mtproto_min_interval_seconds": 60
-  }
-}
-```
-
-`track_sale = true` включает MTProto только когда `api_id` и `api_hash` заполнены. Для создания или восстановления session остановите `start.bat` и запустите `login.bat`. Без авторизованной session HTTP monitoring продолжит работу, но sale/owner enrichment будет недоступен.
-
-Не используйте одну SQLite session одновременно в нескольких процессах или с разных IP. При `AuthKeyDuplicatedError` монитор отключает MTProto lookup до перезапуска и сохраняет предыдущие sale/owner-поля. `login.bat` архивирует отозванную session как `.bak` и создаёт новую через QR.
-
 ### Monitor
 
 | Поле | По умолчанию | Назначение |
@@ -203,8 +170,6 @@ python main.py
 | `notify_initial_snapshot` | `true` | Отправить baseline после первого чтения |
 | `notify_errors` | `true` | Разрешить автоматические error alerts |
 | `track_image_url` | `false` | Считать image URL значимым изменением |
-| `track_sale` | `true` | Разрешить MTProto enrichment при готовых credentials/session |
-| `mtproto_min_interval_seconds` | `60` | Минимальный интервал MTProto lookup одного slug |
 | `timezone` | `Europe/Moscow` | Timezone для отображения |
 | `state_path` | `state/nft_gift_state.json` | Путь к state |
 | `events_path` | `logs/nft_gift_events.jsonl` | Путь к JSONL events |
@@ -219,9 +184,6 @@ python main.py
 | `BOT_TOKEN` | `bot.token` |
 | `ADMIN_IDS` | `bot.admin_ids`, comma-separated |
 | `NFT_GIFT_TARGETS` | `monitor.targets`, comma-separated |
-| `TG_API_ID` | `telegram.api_id` |
-| `TG_API_HASH` | `telegram.api_hash` |
-| `TG_SESSION_NAME` | `telegram.session_name` |
 
 ## 🤖 Команды Telegram
 
@@ -245,8 +207,6 @@ python main.py
 | `logs/nft_gift_events.jsonl` | Baseline, meaningful changes и errors |
 | `logs/gifts/<slug>/nft_gift_events.jsonl` | Та же лента для одного подарка |
 | `logs/monitor.log` | Технический runtime log |
-| `state/nft_gift_account.session` | Опциональная Telethon session |
-| `state/nft_gift_account.session.invalid-*.bak` | Архив отозванной session после восстановления |
 
 Изменения quantity/issued/total обновляют state и видны в техническом log, но если изменились только эти поля, отдельный JSONL event не создаётся. Original details и avatar URL сами не вызывают Telegram alert: при отдельном изменении они пишутся как `ignored_change`, а при одновременном значимом изменении входят в общий JSONL event. Image URL вызывает alert только при `track_image_url = true`.
 
@@ -254,33 +214,29 @@ python main.py
 
 ## 🔐 Безопасность
 
-- Никогда не коммитьте `config.json`, `.env`, `*.session` или `*.session-journal`.
+- Никогда не коммитьте `config.json` или `.env`.
 - Замените placeholder `admin_ids`; он является синтаксически допустимым ID.
-- Telethon session даёт доступ пользовательского аккаунта и требует той же защиты, что пароль.
 - State и JSONL могут содержать владельцев, TON addresses и историю изменений.
-- После утечки bot token или API credentials немедленно отзовите их.
+- После утечки bot token немедленно отзовите его.
 
 ## ⚠️ Ограничения
 
 - HTML-разбор зависит от текущей структуры публичной страницы t.me.
-- HTTP-only режим не знает приватные MTProto sale/owner fields.
-- MTProto enrichment не работает без заранее авторизованной user session.
-- Telegram может ограничивать частые HTTP и MTProto запросы.
+- Монитор видит только данные, которые Telegram публикует на публичной NFT-странице.
+- Telegram может ограничивать частые HTTP-запросы.
 - Пустая или временно изменённая публичная страница может задержать фиксацию события.
 - Тексты бота и runtime logs преимущественно русскоязычные.
 
 ## 🧪 Проверка и диагностика
 
-В репозитории пока нет автоматических тестов и CI. Полноценная проверка требует Bot API, а MTProto-режим дополнительно требует user session.
+В репозитории пока нет автоматических тестов и CI. Полноценная проверка требует Bot API.
 
 Если монитор не запускается:
 
 1. Проверьте JSON-синтаксис `config.json`.
 2. Замените token, admin ID и targets placeholders.
 3. Установите зависимости: `python -m pip install -r requirements.txt`.
-4. Для HTTP-only явно установите `track_sale` в `false`.
-5. Для MTProto проверьте `api_id`, `api_hash` и путь session; для входа или `AuthKeyDuplicatedError` остановите монитор и запустите `login.bat`.
-6. Изучите `logs/monitor.log`.
+4. Изучите `logs/monitor.log`.
 
 ## 📄 Лицензия
 
