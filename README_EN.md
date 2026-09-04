@@ -1,74 +1,17 @@
-# 🎁 Telegram NFT Gift Monitor
+# Telegram NFT Gift Monitor
 
-> A Telegram bot that tracks specific NFT gifts through public t.me pages.
+[Русский](README.md) · [English](README_EN.md)
 
-🌐 **Language:** [Русский](README.md) · [English](README_EN.md)
+Monitor for individual NFT gifts using public t.me pages. Compares snapshots and reports owner and attribute changes in Telegram. No Telegram user session is required.
 
-![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=white)
-![aiogram](https://img.shields.io/badge/aiogram-Telegram_bot-26A5E4?logo=telegram&logoColor=white)
-![Data sources](https://img.shields.io/badge/Data-public_web-6F42C1)
-![MIT License](https://img.shields.io/badge/License-MIT-2EA44F.svg)
+## Requirements
 
-## ✨ Overview
-
-Telegram NFT Gift Monitor checks gifts such as `ExampleGift-12345`, stores their latest snapshots, and notifies administrators about changes. It reads the public `https://t.me/nft/<slug>` page and does not require a Telegram user account.
-
-## 🧭 Operating Modes
-
-| Mode | Requirements | Data |
-| --- | --- | --- |
-| HTTP-only | Bot token | Public NFT page, traits, owner, TON address, original details |
-
-## 🚀 Features
-
-- gift page availability checks;
-- title, collection, and number;
-- owner, public link, TON address, and avatar URL;
-- model, backdrop, symbol, and their rarity values;
-- issued quantity and original details;
-- optional image URL tracking;
-- ETag and Last-Modified conditional HTTP requests;
-- independent backoff for each gift;
-- delayed error alerts after a configurable period without a successful snapshot;
-- shared state, global JSONL, and per-gift JSONL;
-- administrator-only Telegram commands and an inline keyboard.
-
-## 🏗️ How It Works
-
-```text
-config.json
-    │
-    ▼
-main.py
-    └── t.me/nft/<slug> ───────── public HTML snapshot
-    │
-    ▼
-normalized snapshot + diff
-    ├── Telegram alerts and commands
-    ├── state/nft_gift_state.json
-    └── global and per-gift JSONL logs
-```
-
-The first successful snapshot becomes the baseline. Every later successful check updates state and sends only meaningful changes. A transient page without an NFT table is ignored when the previous snapshot was valid.
-
-## 📋 Requirements
-
-- Python 3.14 or newer (the latest 3.14.6 patch is recommended);
-- pip 26.1.2, setuptools 84.0.0, and wheel 0.48.0 (the launcher upgrades them automatically);
+- Python 3.14 or newer;
 - a Telegram bot from [@BotFather](https://t.me/BotFather);
 - the Telegram user ID of each administrator;
 - at least one NFT slug or full URL.
 
-Main dependencies:
-
-| Package | Purpose |
-| --- | --- |
-| `aiogram` | Bot API, commands, and inline keyboard |
-| `httpx` | Asynchronous HTTP requests |
-| `beautifulsoup4` | Public NFT page parsing |
-| `tzdata` | IANA time zones on systems without a system database |
-
-## ⚙️ Installation and Running
+## Quick start
 
 ### 1. Clone the repository
 
@@ -88,6 +31,8 @@ On its first run, the launcher:
 1. creates `.venv`;
 2. copies `config.example.json` to `config.json`;
 3. exits so you can fill in the configuration.
+
+Fill in the bot token, administrator IDs, and gift targets in `config.json`, then run `start.bat` again.
 
 ### 3. Manual start
 
@@ -113,7 +58,16 @@ cp config.example.json config.json
 python main.py
 ```
 
-## 🎯 Monitoring Targets
+## How it works
+
+```mermaid
+flowchart TD
+    A["t.me/nft/slug"] --> B["Gift snapshot"]
+    B["Gift snapshot"] --> C["Compare with saved state"]
+    C["Compare with saved state"] --> D["Telegram + event history"]
+```
+
+## Monitoring Targets
 
 A simple list:
 
@@ -141,7 +95,7 @@ Supported forms:
 
 Invalid and duplicate slugs are discarded.
 
-## ⚙️ Configuration
+## Configuration
 
 ### Bot
 
@@ -185,7 +139,7 @@ Environment values take precedence over matching fields:
 | `ADMIN_IDS` | `bot.admin_ids`, comma-separated |
 | `NFT_GIFT_TARGETS` | `monitor.targets`, comma-separated |
 
-## 🤖 Telegram Commands
+## Telegram Commands
 
 | Command | Action |
 | --- | --- |
@@ -199,7 +153,7 @@ Environment values take precedence over matching fields:
 
 Users outside `admin_ids` receive an access-denied response.
 
-## 💾 State, Events, and Errors
+## State, Events, and Errors
 
 | Path | Contents |
 | --- | --- |
@@ -212,14 +166,14 @@ Quantity/issued/total changes update state and appear in the technical log, but 
 
 After a `429` or `5xx`, the affected slug enters backoff. An automatic error message is sent only when the latest successful snapshot is older than `stale_error_notify_seconds`; a manual `/check` reports the error immediately.
 
-## 🔐 Security
+## Security
 
 - Never commit `config.json` or `.env`.
 - Replace the placeholder `admin_ids`; it is a syntactically valid ID.
 - State and JSONL may contain owners, TON addresses, and change history.
 - Revoke leaked bot tokens immediately.
 
-## ⚠️ Limitations
+## Limitations
 
 - HTML parsing depends on the current public t.me page structure.
 - The monitor sees only data that Telegram publishes on the public NFT page.
@@ -227,21 +181,14 @@ After a `429` or `5xx`, the affected slug enters backoff. An automatic error mes
 - A missing or transient public page may delay an event.
 - Bot messages and runtime logs are primarily in Russian.
 
-## 🧪 Testing and Troubleshooting
+## License
 
-The repository currently has no automated tests or CI. End-to-end verification requires the Bot API.
+[MIT](LICENSE).
 
-If the monitor does not start:
+## Support
 
-1. Validate the JSON syntax in `config.json`.
-2. Replace token, admin ID, and target placeholders.
-3. Install dependencies with `python -m pip install -r requirements.txt`.
-4. Read `logs/monitor.log`.
-
-## 📄 License
-
-This project is distributed under the [MIT License](LICENSE).
+Feel free to [fork this repository](https://github.com/soroka01/Telegram-nft-gifts-monitoring/fork) and adapt it. If it helped you, leave a [Star](https://github.com/soroka01/Telegram-nft-gifts-monitoring) so I can see it was useful.
 
 ---
 
-Built for transparent monitoring of public data without bypassing Telegram privacy.
+with love ❤️
