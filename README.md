@@ -194,7 +194,8 @@ python main.py
 
 ```text
 .
-├── main.py                # монитор и Telegram-бот
+├── main.py                # точка входа
+├── nft_monitor/           # код: config, parser, diff, fetcher, monitor, bot, state
 ├── config.example.json    # шаблон конфигурации
 ├── config.json            # ваша конфигурация (не коммитится)
 ├── requirements.txt       # зависимости: aiogram, httpx, beautifulsoup4, tzdata

@@ -194,7 +194,8 @@ Users outside `admin_ids` receive an access-denied response.
 
 ```text
 .
-├── main.py                # monitor and Telegram bot
+├── main.py                # entry point
+├── nft_monitor/           # code: config, parser, diff, fetcher, monitor, bot, state
 ├── config.example.json    # configuration template
 ├── config.json            # your configuration (not committed)
 ├── requirements.txt       # dependencies: aiogram, httpx, beautifulsoup4, tzdata
