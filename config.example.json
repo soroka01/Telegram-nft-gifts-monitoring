@@ -13,6 +13,7 @@
     "interval_seconds": 30,
     "request_timeout_seconds": 10,
     "request_delay_seconds": 0.25,
+    "max_requests_per_hour": 540,
     "jitter_seconds": 3,
     "error_backoff_seconds": 120,
     "stale_error_notify_seconds": 3600,

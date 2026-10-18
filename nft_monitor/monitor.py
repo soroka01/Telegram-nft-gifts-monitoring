@@ -4,12 +4,13 @@ import asyncio
 import logging
 import random
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
 from .config import AppConfig
 from .diff import diff_snapshots, should_store_change_event
-from .fetcher import FetchError, GiftFetcher
+from .fetcher import FetchError, GiftFetcher, PageUnavailable
 from .messages import (
     format_diff,
     format_results,
@@ -20,6 +21,7 @@ from .messages import (
 from .models import CheckResult
 from .notifier import Notifier
 from .state import StateStore
+from .throttle import ThrottleGuard
 from .util import (
     code_text,
     compact_text,
@@ -35,11 +37,14 @@ from .util import (
 LOGGER = logging.getLogger("nft-monitor")
 
 MAX_RETRY_AFTER_SECONDS = 3600
+MAX_EMPTY_STREAK = 3  # страниц без данных подряд, после которых считаем, что Telegram ограничил запросы
 
 
-def log_check(status: str, slug: str, detail: str, started_at: float | None = None) -> None:
+def log_check(
+    status: str, slug: str, detail: str, started_at: float | None = None, level: int = logging.INFO
+) -> None:
     elapsed = f" | {int((time.perf_counter() - started_at) * 1000):>4} ms" if started_at is not None else ""
-    LOGGER.info("%-7s | %-32s | %s%s", status, slug[:32], detail, elapsed)
+    LOGGER.log(level, "%-7s | %-32s | %s%s", status, slug[:32], detail, elapsed)
 
 
 def _owner_of(snapshot: dict[str, Any]) -> Any:
@@ -55,7 +60,9 @@ class GiftMonitor:
         self.fetcher = fetcher
         self.notifier = notifier
         self.tz = get_timezone(self.cfg.timezone_name)
-        self.lock = asyncio.Lock()
+        self.lock = asyncio.Lock()  # автоматический круг: из-за темпа запросов он длится минутами
+        self.manual_lock = asyncio.Lock()  # ручная проверка не ждёт окончания круга
+        self.slug_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.stop_event = asyncio.Event()
         self.last_started_at: str | None = None
         self.last_finished_at: str | None = None
@@ -64,6 +71,9 @@ class GiftMonitor:
         self.error_backoff_until: dict[str, datetime] = {}
         self.first_error_at: dict[str, datetime] = {}
         self.stale_error_notified: set[str] = set()
+        self.guard = ThrottleGuard(trigger=min(MAX_EMPTY_STREAK, len(self.cfg.targets)))
+        self.throttle_notified = False
+        self.last_attempt: dict[str, float] = {}
 
     # --- цикл ----------------------------------------------------------------
 
@@ -74,13 +84,17 @@ class GiftMonitor:
         await self.notifier.send(self.startup_text(), disable_web_page_preview=True)
         while not self.stop_event.is_set():
             try:
-                await self.run_once(manual=False, notify_no_changes=False)
+                if self.guard.remaining() <= 0:
+                    await self.run_once(manual=False, notify_no_changes=False)
+                await self._notify_throttle()
             except Exception as exc:
                 LOGGER.exception("LOOP    | failed")
                 self.last_error = f"{type(exc).__name__}: {exc}"
                 await self.notifier.send(f"<b>Ошибка цикла мониторинга</b>\n{code_text(self.last_error)}")
 
-            timeout = self.cfg.interval_seconds + random.uniform(0, self.cfg.jitter_seconds)
+            timeout = max(
+                self.cfg.interval_seconds + random.uniform(0, self.cfg.jitter_seconds), self.guard.remaining()
+            )
             try:
                 await asyncio.wait_for(self.stop_event.wait(), timeout=timeout)
             except asyncio.TimeoutError:
@@ -89,38 +103,64 @@ class GiftMonitor:
     async def run_once(
         self, manual: bool, notify_no_changes: bool, only_slug: str | None = None
     ) -> list[CheckResult]:
-        if self.lock.locked():
+        lock = self.manual_lock if manual else self.lock
+        if lock.locked():
             return [CheckResult(slug=only_slug or "all", ok=False, error="Проверка уже идет.")]
 
-        targets = [only_slug] if only_slug else self.cfg.targets
-        async with self.lock:
+        targets = [only_slug] if only_slug else self._targets_by_staleness()
+        async with lock:
             started = time.perf_counter()
             self.last_started_at = utc_now_iso()
             self.last_error = None
             results: list[CheckResult] = []
+            empty_streak = 0
             for index, slug in enumerate(targets):
                 if index and self.cfg.request_delay_seconds:
                     await asyncio.sleep(self.cfg.request_delay_seconds)
-                results.append(await self.check_gift(slug, manual=manual, notify_no_changes=notify_no_changes))
+                result = await self.check_gift(slug, manual=manual, notify_no_changes=notify_no_changes)
+                results.append(result)
+                empty_streak = empty_streak + 1 if result.no_data else 0
+                if self.guard.remaining() > 0 or empty_streak >= self.guard.trigger:
+                    # Telegram не отдаёт данные: остальные запросы только удлинят ограничение.
+                    results.extend(self._skipped(targets[index + 1 :]))
+                    break
             self.last_finished_at = utc_now_iso()
             self.last_results = results
 
             LOGGER.info(
-                "%-7s | %-32s | ok=%s/%s, changed=%s, quiet=%s, errors=%s | %4d ms",
+                "%-7s | %-32s | ok=%s/%s, changed=%s, quiet=%s, nodata=%s, errors=%s | %4d ms",
                 "DONE",
                 only_slug or "all",
                 sum(r.ok for r in results),
                 len(results),
                 sum(r.changed for r in results),
                 sum(r.ignored_only for r in results),
-                sum(not r.ok for r in results),
+                sum(r.no_data for r in results),
+                sum(not r.ok and not r.no_data for r in results),
                 int((time.perf_counter() - started) * 1000),
             )
+            if not manual:
+                await self._notify_unavailable(results)
             return results
+
+    def _targets_by_staleness(self) -> list[str]:
+        """Давно не проверявшиеся подарки идут первыми: при обрыве цикла никто не остаётся без очереди."""
+        return sorted(self.cfg.targets, key=lambda slug: self.last_attempt.get(slug, 0.0))
+
+    @staticmethod
+    def _skipped(slugs: list[str]) -> list[CheckResult]:
+        return [
+            CheckResult(slug=slug, ok=False, no_data=True, error="пропущен: пауза из-за лимита запросов Telegram")
+            for slug in slugs
+        ]
 
     # --- проверка одного подарка ------------------------------------------------
 
     async def check_gift(self, slug: str, manual: bool, notify_no_changes: bool) -> CheckResult:
+        async with self.slug_locks[slug]:  # ручная и автоматическая проверки одного подарка не дублируют алерт
+            return await self._check_gift(slug, manual, notify_no_changes)
+
+    async def _check_gift(self, slug: str, manual: bool, notify_no_changes: bool) -> CheckResult:
         started_at = time.perf_counter()
         now = utc_now()
         if not manual and self.error_backoff_until.get(slug, now) > now:
@@ -129,8 +169,11 @@ class GiftMonitor:
             return CheckResult(slug=slug, ok=False, error="backoff after previous error")
 
         previous = self.store.gift(slug)
+        self.last_attempt[slug] = time.monotonic()
         try:
-            fetched = await self.fetcher.fetch(slug, previous)
+            fetched = await self.fetcher.fetch(slug, previous, manual=manual)
+            if self.guard.on_page():
+                LOGGER.info("Telegram снова отдаёт данные подарков")
             if fetched.not_modified:
                 log_check("SKIP", slug, "304 not modified", started_at)
                 if manual and notify_no_changes and previous:
@@ -146,6 +189,8 @@ class GiftMonitor:
             if previous is None:
                 return await self._on_baseline(slug, fetched.snapshot, manual, started_at)
             return await self._on_update(slug, previous, fetched.snapshot, notify_no_changes, started_at)
+        except PageUnavailable as exc:
+            return self._on_no_data(slug, exc, manual, started_at)
         except Exception as exc:
             return await self._on_error(slug, previous, exc, manual, now, started_at)
 
@@ -184,8 +229,51 @@ class GiftMonitor:
         if notify_no_changes:
             await self.notifier.send(format_unchanged(snapshot, self.tz))
         status_code = snapshot.get("http", {}).get("status_code")
-        log_check("OK", slug, f"HTTP {status_code} | {snapshot.get('page_status')}", started_at)
+        log_check("OK", slug, f"HTTP {status_code} | {snapshot.get('page_status')}", started_at, logging.DEBUG)
         return CheckResult(slug=slug, ok=True)
+
+    def _on_no_data(self, slug: str, exc: Exception, manual: bool, started_at: float) -> CheckResult:
+        log_check("NODATA", slug, str(exc), started_at)
+        if not manual and self.guard.on_empty():
+            LOGGER.warning(
+                "Telegram не отдаёт данные подарков, вероятно лимит запросов. Пауза %d сек.", self.guard.pause_seconds
+            )
+        return CheckResult(slug=slug, ok=False, no_data=True, error=str(exc))
+
+    async def _notify_unavailable(self, results: list[CheckResult]) -> None:
+        """Пустая страница у отдельных подарков, пока остальные отвечают: подарка, возможно, больше нет."""
+        if self.guard.active or not any(r.ok for r in results):
+            return
+        now = utc_now()
+        for result in results:
+            if not result.no_data or result.slug in self.stale_error_notified:
+                continue
+            previous = self.store.gift(result.slug)
+            if self._should_notify_error(result.slug, previous, now):
+                self.stale_error_notified.add(result.slug)
+                taken = format_dt(previous and previous.get("taken_at"), self.tz)
+                await self.notifier.send(
+                    f"<b>Страница подарка не отдаёт данные</b>\n{gift_link(result.slug)}\n"
+                    f"Последний снимок: {code_text(taken)}"
+                )
+
+    async def _notify_throttle(self) -> None:
+        """Сообщает, что Telegram не отдаёт данные дольше `stale_error_notify_seconds`, и когда это прошло."""
+        if not self.cfg.notify_errors:
+            return
+        since = self.guard.since
+        if self.guard.active and since and not self.throttle_notified:
+            lasted = (utc_now() - since).total_seconds()
+            if lasted >= self.cfg.stale_error_notify_seconds:
+                self.throttle_notified = True
+                await self.notifier.send(
+                    "<b>Telegram не отдаёт данные подарков</b>\n"
+                    f"Лимит запросов длится уже {code_text(f'{int(lasted // 60)} мин')}, "
+                    "мониторинг проверяет лишь изредка."
+                )
+        elif not self.guard.active and self.throttle_notified:
+            self.throttle_notified = False
+            await self.notifier.send("<b>Telegram снова отдаёт данные подарков</b>")
 
     async def _on_error(
         self, slug: str, previous: dict[str, Any] | None, exc: Exception, manual: bool, now: datetime, started_at: float
@@ -231,23 +319,36 @@ class GiftMonitor:
         targets = "\n".join(f"• {gift_link(slug)}" for slug in self.cfg.targets)
         return (
             "<b>NFT Gift Monitor запущен</b>\n"
-            f"Интервал: <code>{self.cfg.interval_seconds} сек</code>\n"
             f"Подарков: <code>{len(self.cfg.targets)}</code>\n"
+            f"Темп запросов: <code>{self.pace_text()}</code>\n"
             "Тихие поля: <code>кол-во, выпущено, исходный отправитель, исходный получатель</code>\n\n"
             f"{targets}"
         )
 
+    def pace_text(self) -> str:
+        limit = self.cfg.max_requests_per_hour
+        if not limit:
+            return "без ограничения"
+        minutes = max(1, round(len(self.cfg.targets) * 60 / limit))
+        return f"до {limit} в час, полный круг ≈ {minutes} мин"
+
     def status_text(self) -> str:
         lines = [
             "<b>Статус NFT Gift Monitor</b>",
-            f"Состояние: <b>{'идет проверка' if self.lock.locked() else 'ожидает'}</b>",
+            f"Состояние: <b>{'идет проверка' if self.lock.locked() or self.manual_lock.locked() else 'ожидает'}</b>",
             f"Подарков в config: <code>{len(self.cfg.targets)}</code>",
-            f"Интервал: <code>{self.cfg.interval_seconds} сек</code>",
+            f"Пауза между кругами: <code>{self.cfg.interval_seconds} сек</code>",
+            f"Темп запросов: <code>{self.pace_text()}</code>",
             f"Последний старт: <code>{html_escape(format_dt(self.last_started_at, self.tz))}</code>",
             f"Последнее завершение: <code>{html_escape(format_dt(self.last_finished_at, self.tz))}</code>",
             f"State: <code>{html_escape(self.cfg.state_path)}</code>",
             f"Events: <code>{html_escape(self.cfg.events_path)}</code>",
         ]
+        if self.guard.active:
+            lines.append(
+                f"Лимит Telegram: данные не приходят с <code>{html_escape(format_dt(self.guard.since, self.tz))}</code>, "
+                f"следующая проба через <code>{int(self.guard.remaining())} сек</code>"
+            )
         if self.last_error:
             lines.append(f"Последняя ошибка: <code>{html_escape(self.last_error)}</code>")
         if self.last_results:

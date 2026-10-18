@@ -26,6 +26,7 @@ Telegram NFT Gift Monitor checks gifts such as `ExampleGift-12345`, stores their
 - optional image URL tracking;
 - ETag and Last-Modified conditional HTTP requests;
 - independent backoff for each gift;
+- even request pacing and an automatic pause when Telegram stops serving gift data;
 - delayed error alerts: only after a configurable period without a successful snapshot;
 - shared state, global JSONL, and per-gift JSONL;
 - administrator-only Telegram commands and inline keyboard.
@@ -45,7 +46,11 @@ normalized snapshot + diff
     └── JSONL logs: global and per gift
 ```
 
-The first successful snapshot becomes the baseline. Every later successful check updates state and sends alerts only for meaningful changes. A transient page without an NFT table is ignored when the previous snapshot was valid.
+The first successful snapshot becomes the baseline. Every later successful check updates state and sends alerts only for meaningful changes. A page without an NFT table never reaches state: it means either Telegram is rate-limiting requests or the gift no longer exists.
+
+### Telegram rate limit
+
+The public page serves gift data only about 30 times per minute and 600 times per hour per IP; beyond that it returns an empty page with status 200. The monitor therefore spreads requests evenly (`max_requests_per_hour`, 540 by default) and walks the gifts round-robin, least recently checked first: a full pass takes `gifts / max_requests_per_hour` hours. If pages without data still arrive back to back, the monitor pauses for 60 s, then probes with a single request and doubles the pause on failure (up to 10 minutes); the first normal page lifts the limit. If the limit lasts longer than `stale_error_notify_seconds`, administrators get one message, and one more when it recovers. A gift whose page is empty while the others respond falls under the usual delayed error alert. A manual `/check` does not wait for the pass to finish and runs faster (up to 25 requests per minute); it spends headroom above the 540 per hour and reports pages without data as "нет данных" (no data).
 
 ## 🚀 Quick start
 
@@ -127,9 +132,10 @@ The monitor accepts commands from and sends notifications only to users in `bot.
 | `bot.token` | — | Bot token; required |
 | `bot.admin_ids` | — | Administrator IDs |
 | `monitor.targets` | — | Gift list; required |
-| `monitor.interval_seconds` | `30` | Delay between cycles; minimum 5 seconds |
+| `monitor.interval_seconds` | `30` | Delay between passes; minimum 5 seconds |
 | `monitor.request_timeout_seconds` | `10` | HTTP timeout; minimum 2 seconds |
-| `monitor.request_delay_seconds` | `0.25` | Delay between gifts within one cycle |
+| `monitor.request_delay_seconds` | `0.25` | Minimum delay between gifts within one pass |
+| `monitor.max_requests_per_hour` | `540` | Request ceiling per hour; `0` disables the limit |
 | `monitor.jitter_seconds` | `3` | Random addition to the cycle delay |
 | `monitor.error_backoff_seconds` | `120` | How long to skip a target after an error |
 | `monitor.stale_error_notify_seconds` | `3600` | How long an error must persist before an alert |
@@ -183,7 +189,7 @@ Users outside `admin_ids` receive an access-denied response.
 | `state/nft_gift_state.json` | Latest snapshot for each slug |
 | `logs/nft_gift_events.jsonl` | Baselines, meaningful changes, and errors |
 | `logs/gifts/<slug>/nft_gift_events.jsonl` | The same stream for one gift |
-| `logs/monitor.log` | Technical runtime log |
+| `logs/monitor.log` | Technical runtime log (rotated: 5 MB × 5 files) |
 
 - Quantity/issued/total changes update state and appear in the technical log, but no separate JSONL event is written when only those fields change.
 - Original details and avatar URLs do not trigger alerts: on their own they are written as `ignored_change`, and alongside a significant change they are included in the shared JSONL event.
@@ -195,7 +201,7 @@ Users outside `admin_ids` receive an access-denied response.
 ```text
 .
 ├── main.py                # entry point
-├── nft_monitor/           # code: config, parser, diff, fetcher, monitor, bot, state
+├── nft_monitor/           # code: config, parser, diff, fetcher, throttle, monitor, bot, state
 ├── config.example.json    # configuration template
 ├── config.json            # your configuration (not committed)
 ├── requirements.txt       # dependencies: aiogram, httpx, beautifulsoup4, tzdata
@@ -215,8 +221,8 @@ Users outside `admin_ids` receive an access-denied response.
 
 - HTML parsing depends on the current public t.me page structure.
 - The monitor sees only data that Telegram publishes on the public NFT page.
-- Telegram may rate-limit frequent HTTP requests.
-- A missing or transient public page may delay an event.
+- Telegram rate-limits requests to the public page (about 600 per hour per IP; the values were observed, not documented, and may change); with many gifts a pass stretches out: 100 gifts at 540 per hour take about 11 minutes.
+- An empty or transient public page postpones an event until the next successful check.
 - Bot messages and runtime logs are primarily in Russian.
 - There are no automated tests or CI; end-to-end verification requires the Bot API.
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -8,17 +7,24 @@ import httpx
 
 from .config import MonitorConfig
 from .parser import parse_gift_html
+from .throttle import RequestPacer
 from .util import gift_url
 
-LOGGER = logging.getLogger("nft-monitor")
-
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+MANUAL_REQUESTS_PER_HOUR = 1500  # ручная проверка идёт быстрее круга, но не чаще 25 запросов в минуту
 
 
 class FetchError(RuntimeError):
     def __init__(self, message: str, retry_after: float | None = None) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class PageUnavailable(FetchError):
+    """Страница открылась (200), но данных подарка в ней нет.
+
+    Так Telegram отвечает при превышении лимита запросов; то же будет, если подарка больше нет.
+    """
 
 
 @dataclass
@@ -37,6 +43,8 @@ def _parse_retry_after(value: str | None) -> float | None:
 
 class GiftFetcher:
     def __init__(self, config: MonitorConfig) -> None:
+        self.pacer = RequestPacer(config.max_requests_per_hour)
+        self.manual_pacer = RequestPacer(MANUAL_REQUESTS_PER_HOUR if config.max_requests_per_hour else 0)
         self.client = httpx.AsyncClient(
             headers={
                 "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -51,7 +59,7 @@ class GiftFetcher:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def fetch(self, slug: str, previous: dict[str, Any] | None = None) -> FetchResult:
+    async def fetch(self, slug: str, previous: dict[str, Any] | None = None, manual: bool = False) -> FetchResult:
         headers: dict[str, str] = {}
         previous_http = (previous or {}).get("http", {})
         if previous_http.get("etag"):
@@ -59,6 +67,7 @@ class GiftFetcher:
         if previous_http.get("last_modified"):
             headers["if-modified-since"] = str(previous_http["last_modified"])
 
+        await (self.manual_pacer if manual else self.pacer).acquire()
         try:
             response = await self.client.get(gift_url(slug), headers=headers)
         except httpx.HTTPError as exc:
@@ -75,9 +84,6 @@ class GiftFetcher:
             raise FetchError(f"HTTP {status}")
 
         snapshot = parse_gift_html(slug, response.text, status, response.headers)
-        if previous and previous.get("page_status") == "ok" and snapshot["page_status"] == "no_gift_table":
-            LOGGER.warning(
-                "Skipping transient non-gift page for %s: title=%r", slug, snapshot["gift"].get("title")
-            )
-            return FetchResult(snapshot=None, not_modified=True, status_code=status)
+        if snapshot["page_status"] == "no_gift_table":
+            raise PageUnavailable("страница без данных подарка")
         return FetchResult(snapshot=snapshot, status_code=status)

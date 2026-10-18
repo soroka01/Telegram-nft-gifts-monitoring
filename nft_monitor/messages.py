@@ -163,16 +163,22 @@ def format_results(results: list[CheckResult]) -> str:
     changed = sum(item.changed for item in results)
     baseline = sum(item.baseline for item in results)
     ignored = sum(item.ignored_only for item in results)
-    lines = [
-        "<b>Проверка NFT-подарков завершена</b>",
+    no_data = sum(item.no_data for item in results)
+    summary = (
         f"подарков: <code>{len(results)}</code>, успешно: <code>{ok}</code>, изменений: <code>{changed}</code>, "
-        f"только тихих: <code>{ignored}</code>, новых: <code>{baseline}</code>",
-        "",
-    ]
+        f"только тихих: <code>{ignored}</code>, новых: <code>{baseline}</code>"
+    )
+    if no_data:
+        summary += f", без данных: <code>{no_data}</code>"
+    lines = ["<b>Проверка NFT-подарков завершена</b>", summary, ""]
+    if no_data:
+        lines += ["Страница не отдаёт данные подарка: вероятно, Telegram ограничил частоту запросов.", ""]
     for item in results:
         slug = html_escape(item.slug)
         if item.ok:
             lines.append(f"• <code>{slug}</code>: {_result_status(item)}")
+        elif item.no_data:
+            lines.append(f"• <code>{slug}</code>: нет данных")
         else:
             lines.append(f"• <code>{slug}</code>: ошибка <code>{html_escape(item.error)}</code>")
     return "\n".join(lines)

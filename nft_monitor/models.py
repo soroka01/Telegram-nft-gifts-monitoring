@@ -11,4 +11,5 @@ class CheckResult:
     baseline: bool = False
     not_modified: bool = False
     ignored_only: bool = False
+    no_data: bool = False
     error: str | None = None

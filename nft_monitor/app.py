@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -16,6 +17,9 @@ from .monitor import GiftMonitor
 from .notifier import Notifier
 from .state import StateStore
 
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUPS = 5
+
 
 def setup_logging(config: AppConfig) -> None:
     formatter = logging.Formatter(
@@ -24,7 +28,12 @@ def setup_logging(config: AppConfig) -> None:
     )
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
-    file_handler = logging.FileHandler(config.monitor.events_path.parent / "monitor.log", encoding="utf-8")
+    file_handler = RotatingFileHandler(
+        config.monitor.events_path.parent / "monitor.log",
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUPS,
+        encoding="utf-8",
+    )
     file_handler.setFormatter(formatter)
 
     logging.basicConfig(level=logging.INFO, handlers=[console_handler, file_handler], force=True)

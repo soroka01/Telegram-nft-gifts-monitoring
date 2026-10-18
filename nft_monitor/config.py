@@ -30,6 +30,7 @@ class MonitorConfig:
     interval_seconds: int
     request_timeout_seconds: float
     request_delay_seconds: float
+    max_requests_per_hour: int
     jitter_seconds: float
     error_backoff_seconds: int
     stale_error_notify_seconds: int
@@ -137,6 +138,7 @@ def load_config(path: Path = CONFIG_PATH) -> AppConfig:
         interval_seconds=parse_number(monitor_raw, "interval_seconds", 30, int, 5),
         request_timeout_seconds=parse_number(monitor_raw, "request_timeout_seconds", 10, float, 2.0),
         request_delay_seconds=parse_number(monitor_raw, "request_delay_seconds", 0.25, float, 0.0),
+        max_requests_per_hour=parse_number(monitor_raw, "max_requests_per_hour", 540, int, 0),
         jitter_seconds=parse_number(monitor_raw, "jitter_seconds", 3, float, 0.0),
         error_backoff_seconds=parse_number(monitor_raw, "error_backoff_seconds", 120, int, 0),
         stale_error_notify_seconds=parse_number(monitor_raw, "stale_error_notify_seconds", 3600, int, 0),
