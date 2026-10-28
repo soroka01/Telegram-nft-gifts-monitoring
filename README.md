@@ -1,8 +1,8 @@
 # 🎁 Telegram NFT Gift Monitor
 
-> Telegram-бот для отслеживания конкретных NFT-подарков по публичным страницам t.me.
+> A Telegram bot that tracks specific NFT gifts through public t.me pages.
 
-🌐 **Язык / Language:** [Русский](README.md) · [English](README_EN.md)
+🌐 **Language / Язык:** [English](README.md) · [Русский](README_RU.md)
 
 ![Python 3.14+](https://img.shields.io/badge/Python-3.14%2B-3776AB?logo=python&logoColor=white)
 ![aiogram](https://img.shields.io/badge/aiogram-3.x-26A5E4?logo=telegram&logoColor=white)
@@ -11,25 +11,25 @@
 
 ## 📌 Overview
 
-Telegram NFT Gift Monitor проверяет подарки вида `ExampleGift-12345`, сохраняет их последние снимки и уведомляет администраторов об изменениях. Монитор читает публичную страницу `https://t.me/nft/<slug>` и не требует пользовательского Telegram-аккаунта — нужен только токен бота.
+Telegram NFT Gift Monitor checks gifts such as `ExampleGift-12345`, stores their latest snapshots, and notifies administrators about changes. It reads the public `https://t.me/nft/<slug>` page and does not require a Telegram user account — only a bot token.
 
 > [!WARNING]
-> Замените placeholder `admin_ids` из примера конфигурации: это синтаксически допустимый ID, а не заглушка.
+> Replace the placeholder `admin_ids` from the example config: it is a syntactically valid ID, not a dummy value.
 
 ## ✨ Features
 
-- проверка доступности страницы подарка;
-- название, коллекция и номер;
-- владелец, публичная ссылка, TON address и avatar URL;
-- модель, фон, символ и их rarity;
-- количество выпущенных подарков и исходные сведения (original details);
-- опциональное отслеживание image URL;
-- ETag и Last-Modified для условных HTTP-запросов;
-- отдельный backoff для каждого подарка;
-- равномерный темп запросов и автоматическая пауза, когда Telegram перестаёт отдавать данные;
-- отложенные error alerts: только после заданного периода без успешного снимка;
-- общий state, глобальный JSONL и отдельный JSONL каждого подарка;
-- Telegram-команды и inline keyboard только для администраторов.
+- gift page availability checks;
+- title, collection, and number;
+- owner, public link, TON address, and avatar URL;
+- model, backdrop, symbol, and their rarity values;
+- issued quantity and original details;
+- optional image URL tracking;
+- ETag and Last-Modified conditional HTTP requests;
+- independent backoff for each gift;
+- even request pacing and an automatic pause when Telegram stops serving gift data;
+- delayed error alerts: only after a configurable period without a successful snapshot;
+- shared state, global JSONL, and per-gift JSONL;
+- administrator-only Telegram commands and inline keyboard.
 
 ## 🏗️ How it works
 
@@ -37,29 +37,29 @@ Telegram NFT Gift Monitor проверяет подарки вида `ExampleGif
 config.json
     │
     ▼
-main.py ── t.me/nft/<slug> (публичный HTML)
+main.py ── t.me/nft/<slug> (public HTML)
     │
     ▼
-нормализованный снимок + diff
-    ├── Telegram: уведомления и команды
+normalized snapshot + diff
+    ├── Telegram: alerts and commands
     ├── state/nft_gift_state.json
-    └── JSONL-журналы: общий и по каждому подарку
+    └── JSONL logs: global and per gift
 ```
 
-Первый успешный снимок становится baseline. Затем при каждой успешной проверке обновляется state, а уведомления уходят только о значимых изменениях. Страница без NFT-таблицы никогда не попадает в state: это либо ограничение частоты запросов со стороны Telegram, либо подарка больше нет.
+The first successful snapshot becomes the baseline. Every later successful check updates state and sends alerts only for meaningful changes. A page without an NFT table never reaches state: it means either Telegram is rate-limiting requests or the gift no longer exists.
 
-### Лимит запросов Telegram
+### Telegram rate limit
 
-Публичная страница отдаёт данные подарка не чаще примерно 30 раз в минуту и 600 раз в час с одного IP; сверх лимита приходит пустая страница с кодом 200. Поэтому монитор растягивает запросы равномерно (`max_requests_per_hour`, по умолчанию 540) и проверяет подарки по кругу, начиная с давно не проверявшихся: полный круг занимает `подарков / max_requests_per_hour` часа. Если страницы без данных всё же пошли подряд, монитор встаёт на паузу 60 с, затем пробует одним запросом и удваивает паузу при неудаче (максимум 10 минут); первая нормальная страница снимает ограничение. Если ограничение длится дольше `stale_error_notify_seconds`, администраторам уходит одно сообщение, затем — одно о восстановлении. Подарок, у которого страница пуста, пока остальные отвечают, попадает под обычный отложенный error alert. Ручной `/check` не ждёт окончания круга и идёт быстрее (до 25 запросов в минуту); он расходует запас лимита сверх 540 в час, а страницы без данных показывает как «нет данных».
+The public page serves gift data only about 30 times per minute and 600 times per hour per IP; beyond that it returns an empty page with status 200. The monitor therefore spreads requests evenly (`max_requests_per_hour`, 540 by default) and walks the gifts round-robin, least recently checked first: a full pass takes `gifts / max_requests_per_hour` hours. If pages without data still arrive back to back, the monitor pauses for 60 s, then probes with a single request and doubles the pause on failure (up to 10 minutes); the first normal page lifts the limit. If the limit lasts longer than `stale_error_notify_seconds`, administrators get one message, and one more when it recovers. A gift whose page is empty while the others respond falls under the usual delayed error alert. A manual `/check` does not wait for the pass to finish and runs faster (up to 25 requests per minute); it spends headroom above the 540 per hour and reports pages without data as "нет данных" (no data).
 
 ## 🚀 Quick start
 
 ### Requirements
 
-- Python 3.14 или новее;
-- Telegram-бот от [@BotFather](https://t.me/BotFather);
-- Telegram user ID каждого администратора;
-- хотя бы один NFT slug или полная ссылка.
+- Python 3.14 or newer;
+- a Telegram bot from [@BotFather](https://t.me/BotFather);
+- the Telegram user ID of each administrator;
+- at least one NFT slug or full URL.
 
 ### Installation
 
@@ -68,9 +68,9 @@ git clone https://github.com/soroka01/Telegram-nft-gifts-monitoring.git
 cd Telegram-nft-gifts-monitoring
 ```
 
-Windows: `start.bat` сам создаёт `.venv`, при первом запуске копирует `config.example.json` в `config.json` и останавливается, чтобы вы заполнили конфигурацию. При следующих запусках он обновляет pip, setuptools и wheel, ставит зависимости и запускает монитор.
+Windows: `start.bat` creates `.venv`, copies `config.example.json` to `config.json` on first run, and stops so you can fill in the configuration. On later runs it upgrades pip, setuptools, and wheel, installs dependencies, and starts the monitor.
 
-Вручную (Windows PowerShell):
+Manually (Windows PowerShell):
 
 ```powershell
 python -m venv .venv
@@ -79,7 +79,7 @@ python -m pip install -r requirements.txt
 Copy-Item config.example.json config.json
 ```
 
-Вручную (Linux / macOS):
+Manually (Linux / macOS):
 
 ```bash
 python -m venv .venv
@@ -90,7 +90,7 @@ cp config.example.json config.json
 
 ### Configuration
 
-Заполните `config.json`:
+Fill in `config.json`:
 
 ```json
 {
@@ -107,7 +107,7 @@ cp config.example.json config.json
 }
 ```
 
-Остальные поля необязательны, значения по умолчанию — в разделе «Configuration» ниже.
+All other fields are optional; defaults are listed in the "Configuration" section below.
 
 ### Run
 
@@ -115,7 +115,7 @@ cp config.example.json config.json
 start.bat
 ```
 
-или вручную:
+or manually:
 
 ```bash
 python main.py
@@ -123,118 +123,118 @@ python main.py
 
 ## ⚙️ Configuration
 
-Монитор принимает команды и отправляет уведомления только пользователям из `bot.admin_ids`.
+The monitor accepts commands from and sends notifications only to users in `bot.admin_ids`.
 
-### Параметры `bot` и `monitor`
+### `bot` and `monitor` fields
 
-| Поле | Default | Описание |
+| Field | Default | Description |
 | --- | --- | --- |
-| `bot.token` | — | Токен бота; обязателен |
-| `bot.admin_ids` | — | ID администраторов |
-| `monitor.targets` | — | Список подарков; обязателен |
-| `monitor.interval_seconds` | `30` | Пауза между кругами; минимум 5 секунд |
-| `monitor.request_timeout_seconds` | `10` | HTTP timeout; минимум 2 секунды |
-| `monitor.request_delay_seconds` | `0.25` | Минимальная пауза между подарками внутри круга |
-| `monitor.max_requests_per_hour` | `540` | Потолок запросов в час; `0` — без ограничения |
-| `monitor.jitter_seconds` | `3` | Случайная добавка к паузе между циклами |
-| `monitor.error_backoff_seconds` | `120` | Сколько пропускать цель после ошибки |
-| `monitor.stale_error_notify_seconds` | `3600` | Сколько ошибка должна длиться до alert |
-| `monitor.notify_initial_snapshot` | `true` | Отправить baseline после первого чтения |
-| `monitor.notify_errors` | `true` | Разрешить автоматические error alerts |
-| `monitor.track_image_url` | `false` | Считать изменение image URL значимым |
-| `monitor.timezone` | `Europe/Moscow` | Часовой пояс для отображения |
-| `monitor.state_path` | `state/nft_gift_state.json` | Путь к state |
-| `monitor.events_path` | `logs/nft_gift_events.jsonl` | Путь к JSONL events |
-| `monitor.user_agent` | browser-like | User-Agent публичных HTTP-запросов |
+| `bot.token` | — | Bot token; required |
+| `bot.admin_ids` | — | Administrator IDs |
+| `monitor.targets` | — | Gift list; required |
+| `monitor.interval_seconds` | `30` | Delay between passes; minimum 5 seconds |
+| `monitor.request_timeout_seconds` | `10` | HTTP timeout; minimum 2 seconds |
+| `monitor.request_delay_seconds` | `0.25` | Minimum delay between gifts within one pass |
+| `monitor.max_requests_per_hour` | `540` | Request ceiling per hour; `0` disables the limit |
+| `monitor.jitter_seconds` | `3` | Random addition to the cycle delay |
+| `monitor.error_backoff_seconds` | `120` | How long to skip a target after an error |
+| `monitor.stale_error_notify_seconds` | `3600` | How long an error must persist before an alert |
+| `monitor.notify_initial_snapshot` | `true` | Send the baseline after the first read |
+| `monitor.notify_errors` | `true` | Allow automatic error alerts |
+| `monitor.track_image_url` | `false` | Treat image URL changes as significant |
+| `monitor.timezone` | `Europe/Moscow` | Display time zone |
+| `monitor.state_path` | `state/nft_gift_state.json` | State path |
+| `monitor.events_path` | `logs/nft_gift_events.jsonl` | JSONL event path |
+| `monitor.user_agent` | browser-like | User-Agent for public HTTP requests |
 
-### Формат целей
+### Target formats
 
-В `targets` поддерживаются:
+`targets` accepts:
 
-- slug: `ExampleGift-12345`;
-- полная ссылка: `https://t.me/nft/ExampleGift-12345`;
+- a slug: `ExampleGift-12345`;
+- a full URL: `https://t.me/nft/ExampleGift-12345`;
 - `tg://nft?slug=ExampleGift-12345`;
-- объект с флагом включения: `{"slug": "ExampleGift-12345", "enabled": true}`.
+- an object with an enable flag: `{"slug": "ExampleGift-12345", "enabled": true}`.
 
-Невалидные и повторяющиеся slug отбрасываются.
+Invalid and duplicate slugs are discarded.
 
-### Переменные окружения
+### Environment variables
 
-Имеют приоритет над соответствующими полями `config.json`.
+They take precedence over the matching `config.json` fields.
 
-| Переменная | Default | Описание |
+| Variable | Default | Description |
 | --- | --- | --- |
-| `BOT_TOKEN` | — | Заменяет `bot.token` |
-| `ADMIN_IDS` | — | Заменяет `bot.admin_ids`, через запятую |
-| `NFT_GIFT_TARGETS` | — | Заменяет `monitor.targets`, через запятую |
+| `BOT_TOKEN` | — | Overrides `bot.token` |
+| `ADMIN_IDS` | — | Overrides `bot.admin_ids`, comma-separated |
+| `NFT_GIFT_TARGETS` | — | Overrides `monitor.targets`, comma-separated |
 
-### Команды Telegram
+### Telegram commands
 
-| Команда | Действие |
+| Command | Action |
 | --- | --- |
-| `/start` | Справка и inline keyboard |
-| `/help` | Справка |
-| `/status` | Состояние цикла, пути и последний результат |
-| `/gifts` | Настроенные подарки и последние снимки |
-| `/check` | Немедленно проверить все подарки |
-| `/check ExampleGift-12345` | Проверить один slug |
-| `/snapshot ExampleGift-12345` | Показать сохранённый снимок |
+| `/start` | Help and inline keyboard |
+| `/help` | Help |
+| `/status` | Cycle state, paths, and last result |
+| `/gifts` | Configured gifts and latest snapshots |
+| `/check` | Check every gift immediately |
+| `/check ExampleGift-12345` | Check one slug |
+| `/snapshot ExampleGift-12345` | Show a saved snapshot |
 
-Пользователи вне `admin_ids` получают отказ в доступе.
+Users outside `admin_ids` receive an access-denied response.
 
-### State, события и ошибки
+### State, events, and errors
 
-| Путь | Содержимое |
+| Path | Contents |
 | --- | --- |
-| `state/nft_gift_state.json` | Последний снимок каждого slug |
-| `logs/nft_gift_events.jsonl` | Baseline, значимые изменения и ошибки |
-| `logs/gifts/<slug>/nft_gift_events.jsonl` | Та же лента для одного подарка |
-| `logs/monitor.log` | Технический runtime log (ротация: 5 МБ × 5 файлов) |
+| `state/nft_gift_state.json` | Latest snapshot for each slug |
+| `logs/nft_gift_events.jsonl` | Baselines, meaningful changes, and errors |
+| `logs/gifts/<slug>/nft_gift_events.jsonl` | The same stream for one gift |
+| `logs/monitor.log` | Technical runtime log (rotated: 5 MB × 5 files) |
 
-- Изменения quantity/issued/total обновляют state и видны в техническом логе, но если изменились только они, отдельный JSONL event не создаётся.
-- Original details и avatar URL сами не вызывают alert: отдельно они пишутся как `ignored_change`, а при значимом изменении входят в общий JSONL event.
-- Image URL вызывает alert только при `track_image_url = true`.
-- После `429` или `5xx` конкретный slug переходит в backoff. Автоматическое сообщение об ошибке уходит, только если последнему успешному снимку больше `stale_error_notify_seconds`; ручной `/check` сообщает об ошибке сразу.
+- Quantity/issued/total changes update state and appear in the technical log, but no separate JSONL event is written when only those fields change.
+- Original details and avatar URLs do not trigger alerts: on their own they are written as `ignored_change`, and alongside a significant change they are included in the shared JSONL event.
+- Image URL changes alert only when `track_image_url = true`.
+- After a `429` or `5xx`, the affected slug enters backoff. An automatic error message is sent only when the latest successful snapshot is older than `stale_error_notify_seconds`; a manual `/check` reports the error immediately.
 
 ## 🗂️ Project structure
 
 ```text
 .
-├── main.py                # точка входа
-├── nft_monitor/           # код: config, parser, diff, fetcher, throttle, monitor, bot, state
-├── config.example.json    # шаблон конфигурации
-├── config.json            # ваша конфигурация (не коммитится)
-├── requirements.txt       # зависимости: aiogram, httpx, beautifulsoup4, tzdata
-├── start.bat              # launcher для Windows
-├── state/                 # state (создаётся при работе)
-└── logs/                  # monitor.log и JSONL-журналы (создаётся при работе)
+├── main.py                # entry point
+├── nft_monitor/           # code: config, parser, diff, fetcher, throttle, monitor, bot, state
+├── config.example.json    # configuration template
+├── config.json            # your configuration (not committed)
+├── requirements.txt       # dependencies: aiogram, httpx, beautifulsoup4, tzdata
+├── start.bat              # Windows launcher
+├── state/                 # state (created at runtime)
+└── logs/                  # monitor.log and JSONL logs (created at runtime)
 ```
 
 ## 🔒 Security & privacy
 
-- Никогда не коммитьте `config.json` или `.env`.
-- State и JSONL могут содержать владельцев, TON addresses и историю изменений.
-- После утечки bot token немедленно отзовите его через @BotFather.
-- Монитор использует только публичные данные и не обходит приватность Telegram.
+- Never commit `config.json` or `.env`.
+- State and JSONL may contain owners, TON addresses, and change history.
+- Revoke a leaked bot token immediately via @BotFather.
+- The monitor uses public data only and does not bypass Telegram privacy.
 
 ## ⚠️ Limitations
 
-- HTML-разбор зависит от текущей структуры публичной страницы t.me.
-- Монитор видит только то, что Telegram публикует на публичной NFT-странице.
-- Telegram ограничивает частоту запросов к публичной странице (≈600 в час с одного IP, значения получены наблюдением и могут измениться); при большом числе подарков круг проверки растягивается: 100 подарков при лимите 540 в час — около 11 минут.
-- Пустая или временно изменённая страница откладывает фиксацию события до следующей удачной проверки.
-- Тексты бота и runtime logs преимущественно русскоязычные.
-- Автоматических тестов и CI нет; полная проверка требует Bot API.
+- HTML parsing depends on the current public t.me page structure.
+- The monitor sees only data that Telegram publishes on the public NFT page.
+- Telegram rate-limits requests to the public page (about 600 per hour per IP; the values were observed, not documented, and may change); with many gifts a pass stretches out: 100 gifts at 540 per hour take about 11 minutes.
+- An empty or transient public page postpones an event until the next successful check.
+- Bot messages and runtime logs are primarily in Russian.
+- There are no automated tests or CI; end-to-end verification requires the Bot API.
 
-Если монитор не запускается: проверьте JSON-синтаксис `config.json`, замените placeholders (token, admin ID, targets), установите зависимости и изучите `logs/monitor.log`.
+If the monitor does not start: validate the JSON syntax in `config.json`, replace the placeholders (token, admin ID, targets), install dependencies, and read `logs/monitor.log`.
 
 ## 📄 License
 
-Проект распространяется по лицензии [MIT](LICENSE).
+This project is distributed under the [MIT License](LICENSE).
 
 ## 💬 Support
 
-Если проект оказался полезным, сделайте fork или поставьте звезду: [soroka01/Telegram-nft-gifts-monitoring](https://github.com/soroka01/Telegram-nft-gifts-monitoring).
+If you find the project useful, fork it or give it a star: [soroka01/Telegram-nft-gifts-monitoring](https://github.com/soroka01/Telegram-nft-gifts-monitoring).
 
 ---
 
